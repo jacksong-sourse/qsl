@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qsl-quantum"
+version = "0.3.2"
+description = "QSL - Quantum Search Language: Full-stack quantum computing framework with simulator, algorithms (QFT/Shor/QAOA/VQE), QML, hardware backends (IBM/AWS), AI scientist, and self-evolving meta-system"
+authors = [
+    {name = "Song Ziming", email = "15011462616@163.com"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+algorithms = [
+    "scipy>=1.7.0",
+]
+qml = [
+    "torch>=1.10",
+    "scikit-learn>=1.0",
+    "scipy>=1.7.0",
+]
+ibm = [
+    "qiskit>=1.0.0",
+    "qiskit-aer>=0.14.0",
+    "qiskit-ibm-runtime>=0.20.0",
+]
+aws = [
+    "boto3>=1.28",
+    "amazon-braket-sdk>=1.50",
+]
+ai = [
+    "openai>=1.0",
+    "langchain>=0.1",
+    "langchain-openai>=0.1",
+    "pydantic>=2.0",
+]
+meta = [
+    "tensorboard>=2.10",
+    "deap>=1.3",
+    "ray>=2.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+full = [
+    "scipy>=1.7.0",
+    "torch>=1.10",
+    "scikit-learn>=1.0",
+    "qiskit>=1.0.0",
+    "qiskit-aer>=0.14.0",
+    "qiskit-ibm-runtime>=0.20.0",
+    "boto3>=1.28",
+    "amazon-braket-sdk>=1.50",
+    "openai>=1.0",
+    "langchain>=0.1",
+    "langchain-openai>=0.1",
+    "pydantic>=2.0",
+    "tensorboard>=2.10",
+    "deap>=1.3",
+    "ray>=2.0",
+]
+
+[project.scripts]
+qsl = "qsl.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.setuptools.packages.find]
+exclude = ["tests", "tests.*"]
