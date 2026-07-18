@@ -97,8 +97,8 @@ from qsl import AutoBackend
 
 # 自动选择最优后端
 backend = AutoBackend(max_qubits=50)
-best, info = backend.select()
-print(f"Selected: {best}, Reason: {info}")
+best, backend_type = backend.select()
+print(f"Selected: {best} ({backend_type})")
 ```
 
 ### AI 量子科学家

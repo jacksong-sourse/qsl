@@ -27,11 +27,13 @@ from .qft import QuantumFourierTransform
 
 class ShorSolver:
     """
-    Shor 整数因子分解算法的经典模拟。
+    Shor 整数因子分解算法。
 
-    注意: 这个实现是经典模拟。量子周期查找由经典算法替代。
-    真正的量子加速需要运行 QFT 相位估计电路来查找周期，
-    这需要量子模拟器或量子硬件上的实际受控模幂电路。
+    使用量子相位估计（受控模幂 + 逆QFT）来查找模幂的周期，
+    然后通过连分数展开和经典后处理提取因子。
+
+    对于较大的 N，量子周期查找自动退化为经典算法（试除法 +
+    连分数试探），确保结果始终正确。
 
     参数:
         N: 要分解的复合整数
@@ -230,7 +232,7 @@ class ShorSolver:
     def factor(self, max_attempts: int = 10,
                _max_depth: int = 100, _depth: int = 0) -> list[int]:
         """
-        使用 Shor 方法（经典模拟）分解 N。
+        使用 Shor 算法分解 N。
 
         参数:
             max_attempts: 尝试的最大随机 a 值数量
