@@ -23,7 +23,7 @@ if os.path.exists(readme_path):
 
 setup(
     name="qsl-quantum",
-    version="0.3.2",
+    version="0.4.0",
     author="Song Ziming",
     author_email="15011462616@163.com",
     description="Quantum Search Language - DSL for Grover search with simulator and IBM Quantum backends",
@@ -54,9 +54,30 @@ setup(
             "qiskit-aer>=0.14.0",
             "qiskit-ibm-runtime>=0.20.0",
         ],
+        "aws": [
+            "amazon-braket-sdk>=1.0.0",
+            "amazon-braket-default-simulator>=1.0.0",
+        ],
+        "algorithms": [
+            "scipy>=1.8.0",
+        ],
+        "qml": [
+            "torch>=2.0.0",
+            "scikit-learn>=1.0.0",
+        ],
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
+        ],
+        "full": [
+            "qiskit>=1.0.0",
+            "qiskit-aer>=0.14.0",
+            "qiskit-ibm-runtime>=0.20.0",
+            "amazon-braket-sdk>=1.0.0",
+            "amazon-braket-default-simulator>=1.0.0",
+            "scipy>=1.8.0",
+            "torch>=2.0.0",
+            "scikit-learn>=1.0.0",
         ],
     },
     entry_points={

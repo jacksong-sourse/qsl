@@ -39,7 +39,7 @@ class QubitIndexError(QuantumStateError):
         )
 
 
-class DuplicateQubitError(QuantumStateError):
+class DuplicateQubitError(QuantumStateError, ValueError):
     """门操作中重复指定同一个量子比特。"""
 
     def __init__(self, qubits: list):

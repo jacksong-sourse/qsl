@@ -191,32 +191,26 @@ def depth_reduction(gate_sequence: list) -> tuple:
         optimized.extend(layer)
 
     optimized_depth = 0
-    # Compute critical path depth using DAG topological sort
-    # Each gate is a node; edges represent qubit dependencies
-    # Depth of a node = 1 + max(depth of predecessors on overlapping qubits)
-    if not gate_sequence:
-        return gate_sequence, original_depth, optimized_depth
+    if not optimized:
+        return optimized, original_depth, optimized_depth
 
-    # Track the last layer each qubit was used in
     qubit_last_layer: dict = {}
     max_layer = 0
-    for gate in gate_sequence:
+    for gate in optimized:
         targets = set(gate.get('targets', []))
         controls = {gate.get('control')} if 'control' in gate else set()
         all_qubits = targets | controls
 
-        # Find the latest layer any of these qubits was used in
         pred_depth = 0
         for q in all_qubits:
             pred_depth = max(pred_depth, qubit_last_layer.get(q, -1) + 1)
 
-        # This gate goes into layer pred_depth
         current_layer = pred_depth
         for q in all_qubits:
             qubit_last_layer[q] = current_layer
 
         max_layer = max(max_layer, current_layer)
 
-    optimized_depth = max_layer + 1  # layers are 0-indexed
+    optimized_depth = max_layer + 1
 
     return optimized, original_depth, optimized_depth

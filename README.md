@@ -1,4 +1,4 @@
-<h1 align="center">QSL &mdash; 量子搜索语言</h1>
+<h1 align="center">QSL &mdash; 量子搜索语言 v0.4.0</h1>
 
 <p align="center">
   <b>用一句话描述你想找什么，剩下的交给量子计算。</b>
@@ -8,13 +8,13 @@
   <img src="https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
   <img src="https://img.shields.io/badge/tests-365%20passed-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/version-0.3.2-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.4.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/pypi-qsl--quantum-orange?logo=pypi" alt="PyPI">
 </p>
 
 ---
 
-## v0.3.2 — 五级量子计算框架
+## v0.4.0 — 五级量子计算框架
 
 一个完整的量子计算 Python 框架，从声明式搜索到自进化 AI 系统：
 

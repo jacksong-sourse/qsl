@@ -64,12 +64,9 @@ class QuantumState:
         validate_n_qubits(n_qubits, MAX_QUBITS)
         self._n = n_qubits
         self._N = 1 << n_qubits
-        # 用 Python list 存储振幅（apply_gate 等高级操作需要 numpy）
-        self.amplitudes = [0j for _ in range(self._N)]
+        self.amplitudes = np.zeros(self._N, dtype=complex)
         self.amplitudes[0] = 1.0 + 0j
-        # Track gate operation history for circuit visualization
         self._gate_history: list = []
-        # Readout error probability (set via add_noise or defaults to 0)
         self._readout_error: float = 0.0
 
     # ----------------------------------------------------------------
@@ -112,12 +109,15 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        for i in range(self._N):
-            if (i & mask) == 0:
-                j = i | mask
-                self.amplitudes[i], self.amplitudes[j] = (
-                    self.amplitudes[j], self.amplitudes[i]
-                )
+        indices = np.arange(self._N)
+        target_bit_zero = (indices & mask) == 0
+        target_bit_one = ~target_bit_zero
+        
+        a_zero = self.amplitudes[target_bit_zero].copy()
+        a_one = self.amplitudes[target_bit_one].copy()
+        
+        self.amplitudes[target_bit_zero] = a_one
+        self.amplitudes[target_bit_one] = a_zero
 
     def y(self, target: int):
         """
@@ -135,14 +135,15 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        for i in range(self._N):
-            if (i & mask) == 0:
-                j = i | mask
-                a_i = self.amplitudes[i]
-                a_j = self.amplitudes[j]
-                # alpha'_0 = -i * alpha_1, alpha'_1 = i * alpha_0
-                self.amplitudes[i] = -1j * a_j
-                self.amplitudes[j] = 1j * a_i
+        indices = np.arange(self._N)
+        target_bit_zero = (indices & mask) == 0
+        target_bit_one = ~target_bit_zero
+        
+        a_zero = self.amplitudes[target_bit_zero].copy()
+        a_one = self.amplitudes[target_bit_one].copy()
+        
+        self.amplitudes[target_bit_zero] = -1j * a_one
+        self.amplitudes[target_bit_one] = 1j * a_zero
 
     def z(self, target: int):
         """
@@ -159,9 +160,9 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        for i in range(self._N):
-            if i & mask:
-                self.amplitudes[i] = -self.amplitudes[i]
+        indices = np.arange(self._N)
+        target_bit_one = (indices & mask) != 0
+        self.amplitudes[target_bit_one] *= -1
 
     def h(self, target: int):
         """
@@ -183,13 +184,15 @@ class QuantumState:
         validate_qubit_index(target, self._n)
         mask = 1 << target
         inv_sqrt2 = 1.0 / math.sqrt(2)
-        for i in range(self._N):
-            if (i & mask) == 0:
-                j = i | mask
-                a_i = self.amplitudes[i]
-                a_j = self.amplitudes[j]
-                self.amplitudes[i] = (a_i + a_j) * inv_sqrt2
-                self.amplitudes[j] = (a_i - a_j) * inv_sqrt2
+        indices = np.arange(self._N)
+        target_bit_zero = (indices & mask) == 0
+        target_bit_one = ~target_bit_zero
+        
+        a_zero = self.amplitudes[target_bit_zero].copy()
+        a_one = self.amplitudes[target_bit_one].copy()
+        
+        self.amplitudes[target_bit_zero] = (a_zero + a_one) * inv_sqrt2
+        self.amplitudes[target_bit_one] = (a_zero - a_one) * inv_sqrt2
 
     def s(self, target: int):
         """
@@ -205,9 +208,9 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        for i in range(self._N):
-            if i & mask:
-                self.amplitudes[i] *= 1j
+        indices = np.arange(self._N)
+        target_bit_one = (indices & mask) != 0
+        self.amplitudes[target_bit_one] *= 1j
 
     def t(self, target: int):
         """
@@ -222,9 +225,9 @@ class QuantumState:
         validate_qubit_index(target, self._n)
         mask = 1 << target
         phase = cmath.exp(1j * math.pi / 4)
-        for i in range(self._N):
-            if i & mask:
-                self.amplitudes[i] *= phase
+        indices = np.arange(self._N)
+        target_bit_one = (indices & mask) != 0
+        self.amplitudes[target_bit_one] *= phase
 
     # ----------------------------------------------------------------
     # 两量子比特门
@@ -255,12 +258,15 @@ class QuantumState:
             raise DuplicateQubitError([control, target])
         c_mask = 1 << control
         t_mask = 1 << target
-        for i in range(self._N):
-            if (i & c_mask) and not (i & t_mask):
-                j = i ^ t_mask
-                self.amplitudes[i], self.amplitudes[j] = (
-                    self.amplitudes[j], self.amplitudes[i]
-                )
+        indices = np.arange(self._N)
+        c_one_t_zero = ((indices & c_mask) != 0) & ((indices & t_mask) == 0)
+        c_one_t_one = ((indices & c_mask) != 0) & ((indices & t_mask) != 0)
+        
+        a_t0 = self.amplitudes[c_one_t_zero].copy()
+        a_t1 = self.amplitudes[c_one_t_one].copy()
+        
+        self.amplitudes[c_one_t_zero] = a_t1
+        self.amplitudes[c_one_t_one] = a_t0
 
     def cz(self, control: int, target: int):
         """
@@ -282,9 +288,9 @@ class QuantumState:
         c_mask = 1 << control
         t_mask = 1 << target
         both_mask = c_mask | t_mask
-        for i in range(self._N):
-            if (i & both_mask) == both_mask:
-                self.amplitudes[i] = -self.amplitudes[i]
+        indices = np.arange(self._N)
+        both_one = (indices & both_mask) == both_mask
+        self.amplitudes[both_one] *= -1
 
     def swap(self, q0: int, q1: int):
         """
@@ -303,18 +309,18 @@ class QuantumState:
         validate_qubit_index(q0, self._n)
         validate_qubit_index(q1, self._n)
         if q0 == q1:
-            return  # 退化: SWAP(q, q) 是恒等操作
+            return
         mask0 = 1 << q0
         mask1 = 1 << q1
-        for i in range(self._N):
-            b0 = (i & mask0) != 0
-            b1 = (i & mask1) != 0
-            if b0 != b1:
-                j = i ^ mask0 ^ mask1
-                if i < j:  # 避免重复交换
-                    self.amplitudes[i], self.amplitudes[j] = (
-                        self.amplitudes[j], self.amplitudes[i]
-                    )
+        indices = np.arange(self._N)
+        b0 = (indices & mask0) != 0
+        b1 = (indices & mask1) != 0
+        
+        diff = b0 != b1
+        a_diff = self.amplitudes[diff].copy()
+        
+        swapped_indices = indices[diff] ^ mask0 ^ mask1
+        self.amplitudes[swapped_indices] = a_diff
 
     # ----------------------------------------------------------------
     # 三量子比特门
@@ -346,12 +352,19 @@ class QuantumState:
         c2_mask = 1 << c2
         t_mask = 1 << target
         both_mask = c1_mask | c2_mask
-        for i in range(self._N):
-            if (i & both_mask) == both_mask and (i & t_mask) == 0:
-                j = i ^ t_mask
-                self.amplitudes[i], self.amplitudes[j] = (
-                    self.amplitudes[j], self.amplitudes[i]
-                )
+        indices = np.arange(self._N)
+        c_both_one = (indices & both_mask) == both_mask
+        t_zero = (indices & t_mask) == 0
+        t_one = ~t_zero
+        
+        swap_mask = c_both_one & t_zero
+        swap_indices = indices[swap_mask]
+        
+        a_t0 = self.amplitudes[swap_indices].copy()
+        a_t1 = self.amplitudes[swap_indices ^ t_mask].copy()
+        
+        self.amplitudes[swap_indices] = a_t1
+        self.amplitudes[swap_indices ^ t_mask] = a_t0
 
     # ----------------------------------------------------------------
     # 多量子比特门
@@ -378,9 +391,9 @@ class QuantumState:
         mask = 0
         for q in qubits:
             mask |= (1 << q)
-        for i in range(self._N):
-            if (i & mask) == mask:
-                self.amplitudes[i] = -self.amplitudes[i]
+        indices = np.arange(self._N)
+        all_one = (indices & mask) == mask
+        self.amplitudes[all_one] *= -1
 
     # ----------------------------------------------------------------
     # Oracle 相关
@@ -482,24 +495,21 @@ class QuantumState:
             p = self.probability(i)
             cumulative += p
             if r < cumulative:
-                # Apply readout error if configured
+                original_p = p
                 result = i
                 if self._readout_error > 0:
-                    # Flip each bit with probability _readout_error
                     import random as _random
                     for bit in range(self._n):
                         if _random.random() < self._readout_error:
                             result ^= (1 << bit)
-                    p = self.probability(result)
                 if collapse:
                     self._collapse_to(result)
-                return result, p
-        # 浮点精度导致的边界情况: 返回最后一个状态
+                return result, original_p
         last = self._N - 1
-        p = self.probability(last)
+        original_p = self.probability(last)
         if collapse:
             self._collapse_to(last)
-        return last, p
+        return last, original_p
 
     def _collapse_to(self, index: int):
         """坍缩量子态到指定的基态 |index>。"""
@@ -587,9 +597,13 @@ class QuantumState:
         return self.amplitudes.copy()
 
     def clone(self) -> 'QuantumState':
-        """深拷贝当前量子态。"""
-        new_state = QuantumState(self._n)
+        """深拷贝当前量子态，绕过验证以提高性能。"""
+        new_state = QuantumState.__new__(QuantumState)
+        new_state._n = self._n
+        new_state._N = self._N
         new_state.amplitudes = self.amplitudes.copy()
+        new_state._gate_history = self._gate_history.copy()
+        new_state._readout_error = self._readout_error
         return new_state
 
     # ----------------------------------------------------------------
@@ -684,13 +698,15 @@ class QuantumState:
         # Create masks and bit ordering
         target_masks = [1 << t for t in targets]
 
+        max_amp = np.max(np.abs(self.amplitudes))
+        threshold = max_amp * 1e-15 if max_amp > 0 else 1e-40
+        
         for i in range(self._N):
-            if abs(self[i]) < 1e-30:
+            if abs(self[i]) < threshold:
                 continue
 
-            # Extract target bits to form the row index into the matrix
             row_idx = 0
-            for bit_pos, mask in enumerate(target_masks):
+            for bit_pos, mask in enumerate(reversed(target_masks)):
                 if i & mask:
                     row_idx |= (1 << bit_pos)
 
@@ -709,7 +725,79 @@ class QuantumState:
 
                 new_amps[j] += matrix[row_idx, col_idx] * self[i]
 
-        self.amplitudes = list(new_amps)
+        self.amplitudes = new_amps
+
+    def apply_gate_dict(self, gate: dict):
+        """
+        Apply a gate from a dictionary representation.
+
+        Supports standard gates and FUSED_U3 gates produced by gate_fusion.
+
+        Args:
+            gate: Dictionary with 'gate', 'targets', and optional 'params' and 'control'
+        """
+        gate_type = gate.get('gate', '')
+        targets = gate.get('targets', [])
+        params = gate.get('params', {})
+        control = gate.get('control')
+
+        if gate_type == 'FUSED_U3':
+            matrix = np.array(params.get('matrix'), dtype=complex)
+            if targets:
+                self.apply_gate(matrix, *targets)
+        elif gate_type == 'H':
+            for t in targets:
+                self.h(t)
+        elif gate_type == 'X':
+            for t in targets:
+                self.x(t)
+        elif gate_type == 'Y':
+            for t in targets:
+                self.y(t)
+        elif gate_type == 'Z':
+            for t in targets:
+                self.z(t)
+        elif gate_type == 'S':
+            for t in targets:
+                self.s(t)
+        elif gate_type == 'T':
+            for t in targets:
+                self.t(t)
+        elif gate_type == 'CNOT':
+            if control is not None and targets:
+                self.cnot(control, targets[0])
+        elif gate_type == 'CZ':
+            if control is not None and targets:
+                self.cz(control, targets[0])
+        elif gate_type == 'SWAP':
+            if len(targets) >= 2:
+                self.swap(targets[0], targets[1])
+        elif gate_type == 'TOFFOLI':
+            if len(targets) >= 3:
+                self.toffoli(targets[0], targets[1], targets[2])
+        elif gate_type == 'RX':
+            theta = params.get('theta', 0)
+            for t in targets:
+                self.rx(t, theta)
+        elif gate_type == 'RY':
+            theta = params.get('theta', 0)
+            for t in targets:
+                self.ry(t, theta)
+        elif gate_type == 'RZ':
+            phi = params.get('phi', 0)
+            for t in targets:
+                self.rz(t, phi)
+        elif gate_type == 'ORACLE':
+            expression = params.get('expression', '')
+            if expression:
+                from ..core.parser import parse_bool, build_oracle_function
+                expr = parse_bool(expression)
+                oracle = build_oracle_function([expr])
+                marked = set()
+                for i in range(self._N):
+                    if oracle(i):
+                        marked.add(i)
+                self.phase_oracle(marked)
 
     def draw_circuit(self, ascii: bool = True) -> str:
         """

@@ -205,11 +205,29 @@ def parse_qsl(source: str) -> QSLProgram:
 
 
 def _strip_comment(line: str) -> str:
-    """移除行内注释 (// 或 # 之后的部分)。"""
-    for marker in ('//', '#'):
-        idx = line.find(marker)
-        if idx >= 0:
-            return line[:idx]
+    """移除行内注释 (// 或 # 之后的部分)，但保留字符串内部的内容。"""
+    in_string = False
+    escaped = False
+    
+    for i, ch in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        
+        if ch == '\\' and in_string:
+            escaped = True
+            continue
+        
+        if ch == '"' and not escaped:
+            in_string = not in_string
+            continue
+        
+        if not in_string:
+            if i < len(line) - 1 and line[i] == '/' and line[i+1] == '/':
+                return line[:i]
+            if ch == '#':
+                return line[:i]
+    
     return line
 
 

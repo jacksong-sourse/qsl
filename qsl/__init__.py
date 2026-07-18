@@ -18,7 +18,7 @@ Quick start:
     >>> result = compiler.compile_and_run(program)
 """
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 __author__ = "Song Ziming"
 __email__ = "15011462616@163.com"
 

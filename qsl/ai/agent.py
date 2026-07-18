@@ -178,9 +178,24 @@ class QuantumAgent:
         )
 
     def _select_algorithm(self, llm) -> tuple[str, dict]:
-        """Determine which quantum algorithm to use."""
+        """Determine which quantum algorithm to use.
+        
+        Primary logic: keyword matching for reliable algorithm selection.
+        Optional enhancement: LLM can refine selection when enabled and available.
+        """
         task_lower = self.task.lower()
 
+        # Keyword matching as PRIMARY logic
+        if any(w in task_lower for w in ("factor", "rsa", "decrypt", "shor")):
+            return "shor", {"N": 15}
+        elif any(w in task_lower for w in ("optimize", "maxcut", "portfolio", "qaoa")):
+            return "qaoa", {"n_qubits": 4}
+        elif any(w in task_lower for w in ("energy", "ground", "chemistry", "vqe")):
+            return "vqe", {"n_qubits": 4}
+        elif any(w in task_lower for w in ("search", "grover", "find", "sat", "satisfy")):
+            return "grover", {"n_qubits": 4, "premises": ["x0 & x1"]}
+
+        # LLM as OPTIONAL enhancement only when keywords don't match
         if llm:
             prompt = f"""Select the best quantum algorithm for this task.
 Options: grover, shor, qaoa, vqe
@@ -196,15 +211,8 @@ Respond with just the algorithm name."""
             except Exception:
                 pass
 
-        # Keyword matching with reasonable defaults
-        if any(w in task_lower for w in ("factor", "rsa", "decrypt", "shor")):
-            return "shor", {"N": 15}
-        elif any(w in task_lower for w in ("optimize", "maxcut", "portfolio", "qaoa")):
-            return "qaoa", {"n_qubits": 4}
-        elif any(w in task_lower for w in ("energy", "ground", "chemistry", "vqe")):
-            return "vqe", {"n_qubits": 4}
-        else:
-            return "grover", {"n_qubits": 4, "premises": ["x0 & x1"]}
+        # Default fallback
+        return "grover", {"n_qubits": 4, "premises": ["x0 & x1"]}
 
     def _select_backend(self, params: dict) -> str:
         """Select optimal backend."""

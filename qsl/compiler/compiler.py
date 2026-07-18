@@ -19,11 +19,15 @@ QSL 编译器。
     5. 量子比特数不足: 前提引用的变量索引 >= n_qubits
 """
 
+import numpy as np
 from typing import List, Tuple, Optional
 
 from .program import QSLProgram
 from ..core.parser import parse_bool, build_oracle_function, BooleanExpr
 from ..core.grover import GroverResult
+from ..algorithms.shor import ShorSolver
+from ..algorithms.qaoa import QAOA
+from ..algorithms.vqe import VQE
 from ..backends import get_backend, AbstractBackend
 from ..utils.exceptions import (
     NoSolutionError,
@@ -82,27 +86,41 @@ class QSLCompiler:
             **run_options: 传递给 backend.run() 的额外选项
 
         返回:
-            GroverResult
+            GroverResult 或其他算法结果
 
         失败模式:
             - 程序验证失败: 抛出异常
             - 前提无解: 抛出 NoSolutionError
             - 后端错误: 抛出 BackendError
+            - 不支持的算法: 抛出 ProgramValidationError
         """
         # 1. 验证程序
         self._validate_program(program)
 
-        # 2. 确定后端
+        algorithm = program.main_algorithm
+
+        if algorithm == "grover":
+            return self._run_grover(program, backend, **run_options)
+        elif algorithm == "shor":
+            return self._run_shor(program, **run_options)
+        elif algorithm == "qaoa":
+            return self._run_qaoa(program, **run_options)
+        elif algorithm == "vqe":
+            return self._run_vqe(program, **run_options)
+        else:
+            raise ProgramValidationError(
+                "main_algorithm", algorithm,
+                f"不支持的算法: {algorithm}。支持的算法: grover, shor, qaoa, vqe"
+            )
+
+    def _run_grover(self, program: QSLProgram, backend: Optional[str] = None, **run_options):
+        """执行 Grover 搜索。"""
         backend_name = backend or self._backend_name
         backend_instance = self._get_backend(backend_name)
 
-        # 3. 解析前提 -> 组合 Oracle
         parsed_premises = self._parse_premises(program)
-
-        # 4. 构建 Oracle 函数
         oracle = build_oracle_function(parsed_premises)
 
-        # 5. 统计解的数量 (O(N) 经典预检)
         N = 1 << program.n_qubits
         M = sum(1 for x in range(N) if oracle(x))
 
@@ -115,12 +133,21 @@ class QSLCompiler:
         if self.verbose:
             self._print_compilation_info(program, parsed_premises, M)
 
-        # 6. Apply circuit optimization passes
-        # (Placeholder: future versions will build gate sequence from premises
-        #  and run gate_fusion / commutation_optimization / depth_reduction.
-        #  Currently QSLProgram.premises are used directly to build oracle.)
+        gate_sequence = []
+        for premise in program.premises:
+            gate_sequence.append({
+                'gate': 'ORACLE',
+                'targets': list(range(program.n_qubits)),
+                'params': {'expression': premise}
+            })
 
-        # 7. 在后端执行搜索
+        gate_sequence, original_depth, optimized_depth = depth_reduction(
+            commutation_optimization(gate_fusion(gate_sequence))
+        )
+
+        if self.verbose and gate_sequence:
+            print(f"  Circuit optimization: depth reduced from {original_depth} to {optimized_depth}")
+
         shots = program.shots
         options = {**self._backend_options, **run_options}
 
@@ -132,6 +159,89 @@ class QSLCompiler:
             verbose=self.verbose,
             **options,
         )
+
+        return result
+
+    def _run_shor(self, program: QSLProgram, **run_options):
+        """执行 Shor 因子分解算法。"""
+        if self.verbose:
+            print(f"\n{'#'*60}")
+            print(f"  Shor 算法: {program.name}")
+            print(f"{'#'*60}")
+
+        N = run_options.get('N', None)
+        
+        if N is None:
+            import re
+            digits = re.findall(r'\b(\d+)\b', program.name)
+            if digits:
+                N = int(digits[-1])
+            else:
+                N = 1 << program.n_qubits
+        
+        if N < 4:
+            raise ValueError(
+                f"Shor算法需要N >= 4，当前N={N}。"
+                f"请通过compiler.run(N=your_number)指定要分解的整数。"
+            )
+
+        solver = ShorSolver(N)
+        factors = solver.factor()
+
+        if self.verbose:
+            print(f"  N = {N}")
+            print(f"  因子分解结果: {factors}")
+            print(f"  验证: {np.prod(factors) if factors else '无'} = {N}")
+
+        return factors
+
+    def _run_qaoa(self, program: QSLProgram, **run_options):
+        """执行 QAOA 算法。"""
+        if self.verbose:
+            print(f"\n{'#'*60}")
+            print(f"  QAOA 算法: {program.name}")
+            print(f"{'#'*60}")
+
+        n_qubits = program.n_qubits
+
+        cost_matrix = np.zeros((n_qubits, n_qubits))
+        for i, premise in enumerate(program.premises):
+            try:
+                cost_matrix[i % n_qubits, (i + 1) % n_qubits] = float(premise)
+            except ValueError:
+                pass
+
+        qaoa = QAOA(cost_matrix=cost_matrix)
+        result = qaoa.optimize()
+
+        if self.verbose:
+            print(f"  量子比特数: {n_qubits}")
+            print(f"  最优能量: {result.optimal_energy:.4f}")
+            print(f"  最优比特串: {result.optimal_bitstring}")
+
+        return result
+
+    def _run_vqe(self, program: QSLProgram, **run_options):
+        """执行 VQE 算法。"""
+        if self.verbose:
+            print(f"\n{'#'*60}")
+            print(f"  VQE 算法: {program.name}")
+            print(f"{'#'*60}")
+
+        n_qubits = program.n_qubits
+
+        if program.premises:
+            molecule = program.premises[0]
+        else:
+            molecule = "h2"
+
+        vqe = VQE(n_qubits=n_qubits, molecule=molecule)
+        result = vqe.optimize()
+
+        if self.verbose:
+            print(f"  量子比特数: {n_qubits}")
+            print(f"  分子: {molecule}")
+            print(f"  基态能量: {result.ground_energy:.4f}")
 
         return result
 

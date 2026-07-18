@@ -41,7 +41,8 @@ class QuantumSVM(BaseEstimator, ClassifierMixin):
                  use_rbf: bool = False,
                  probability: bool = False,
                  random_state: int = None,
-                 scale: bool = True):
+                 scale: bool = True,
+                 max_samples: int = None):
         self.n_qubits = n_qubits
         self.C = C
         self.gamma = gamma
@@ -49,6 +50,7 @@ class QuantumSVM(BaseEstimator, ClassifierMixin):
         self.probability = probability
         self.random_state = random_state
         self.scale = scale
+        self.max_samples = max_samples
     
     def fit(self, X, y):
         """
@@ -70,6 +72,16 @@ class QuantumSVM(BaseEstimator, ClassifierMixin):
             self.n_qubits_ = X.shape[1]
         else:
             self.n_qubits_ = self.n_qubits
+        
+        # Limit samples if max_samples is specified
+        if self.max_samples is not None and X.shape[0] > self.max_samples:
+            if self.random_state is not None:
+                rng = np.random.RandomState(self.random_state)
+            else:
+                rng = np.random.RandomState()
+            indices = rng.choice(X.shape[0], self.max_samples, replace=False)
+            X = X[indices]
+            y = y[indices]
         
         # Scale features
         if self.scale:
@@ -101,13 +113,20 @@ class QuantumSVM(BaseEstimator, ClassifierMixin):
         K_train = custom_kernel(X, X)
         
         # Fit SVC with pre-computed kernel
-        self.svc_ = SVC(
+        base_svc = SVC(
             kernel='precomputed',
             C=self.C,
-            probability=self.probability,
+            probability=False,
             random_state=self.random_state,
             class_weight='balanced'
         )
+        
+        if self.probability:
+            from sklearn.calibration import CalibratedClassifierCV
+            self.svc_ = CalibratedClassifierCV(base_svc, cv=3, ensemble=False)
+        else:
+            self.svc_ = base_svc
+        
         self.svc_.fit(K_train, y)
         
         # Store for prediction

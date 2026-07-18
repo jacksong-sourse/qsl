@@ -44,7 +44,8 @@ class CircuitGenome:
         n_gates = random.randint(1, max_gates)
         gates = []
         for _ in range(n_gates):
-            gate_info = random.choice(GATE_VOCAB)
+            available_gates = [g for g in GATE_VOCAB if g['n_qubits'] <= n_qubits]
+            gate_info = random.choice(available_gates)
             if gate_info['n_qubits'] == 1:
                 targets = [random.randint(0, n_qubits - 1)]
                 gate = {'gate': gate_info['gate'], 'targets': targets}

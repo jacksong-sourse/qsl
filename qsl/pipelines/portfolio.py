@@ -158,13 +158,12 @@ class PortfolioOptimizer:
             penalty = 10.0
 
             for i in range(self.n_assets):
-                Q[i, i] -= self.returns[i] + penalty * (1 - 2 * self.budget / self.n_assets)
+                Q[i, i] -= self.returns[i]
+                Q[i, i] += gamma * self.covariance[i, i]
+                Q[i, i] += penalty * (1 - 2 * self.budget)
                 for j in range(i + 1, self.n_assets):
                     Q[i, j] = gamma * self.covariance[i, j] * 2 + penalty * 2
 
-            # Simplified: use classical solution for frontier
-            # (optimal: argmin x^T Q x s.t. sum x = budget, x_i in {0,1})
-            # Relaxed LP solution
             relaxed = np.linalg.solve(
                 Q + np.eye(self.n_assets) * 0.01,
                 np.ones(self.n_assets)

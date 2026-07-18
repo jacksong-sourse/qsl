@@ -110,19 +110,22 @@ class QuantumBlockchain:
         """
         Generate a genuinely unpredictable number using Hadamard gate + measurement.
 
-        Applies H to a |0> state producing a uniform superposition,
-        then measures — this gives a truly random bit from quantum principles.
-        The process is repeated to build a float in [0, 1).
+        Applies H to multiple qubits producing uniform superposition,
+        then measures once to get a truly uniform random integer,
+        dividing by 2^n to get a uniform random float in [0, 1).
 
         Falls back to classical random if QuantumState is unavailable.
         """
         try:
             from ..core.state import QuantumState
 
-            state = QuantumState(1)
-            state.h(0)
-            result, _ = state.measure()
-            return result + random.random()  # mix with classical for better distribution
+            n_bits = 8
+            state = QuantumState(n_bits)
+            for i in range(n_bits):
+                state.h(i)
+
+            measurement, _ = state.measure(collapse=False)
+            return measurement / (1 << n_bits)
         except Exception:
             return random.random()
 

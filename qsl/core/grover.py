@@ -98,11 +98,18 @@ class GroverSearch:
             sin_theta = 1e-15
         theta = math.asin(sin_theta)
 
-        # t_opt = round((pi/2 - theta) / (2*theta))
         t_opt = round((math.pi / 2 - theta) / (2 * theta))
-        t_opt = max(0, t_opt)  # 允许 0 次迭代 (M 接近 N 时)
+        t_opt = max(0, t_opt)
 
-        # 理论成功概率
+        if t_opt == 0 and M > 0 and M < N:
+            ratio = M / N
+            if ratio >= 0.5:
+                import warnings
+                warnings.warn(
+                    f"M/N = {ratio:.4f} >= 1/2, 初始态已足够好，"
+                    f"Grover无法提供额外加速。当前成功率约{ratio*100:.1f}%"
+                )
+
         success_prob = math.sin((2 * t_opt + 1) * theta) ** 2
 
         return t_opt, theta, success_prob
@@ -445,7 +452,7 @@ def solve_sat(cnf_clauses: list[list[int]],
         """Evaluate a single literal against a bit assignment."""
         var_idx = abs(literal) - 1
         if var_idx >= n_qubits:
-            return False
+            raise ValueError(f"CNF 变量索引 {literal} 超出 n_qubits={n_qubits}")
         bit_val = bool((assignment >> var_idx) & 1)
         return bit_val if literal > 0 else not bit_val
 

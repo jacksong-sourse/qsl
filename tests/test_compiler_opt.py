@@ -68,28 +68,24 @@ class TestOptimizer:
     # ---------- gate_fusion ----------
 
     def test_gate_fusion_simple_sequence(self):
-        """简单门序列：连续同量子比特单门应被聚合。"""
+        """简单门序列：连续同量子比特单门应被聚合为单个FUSED_U3。"""
         seq = [_h(0), _x(0), _z(0)]
         result = gate_fusion(seq)
-        assert len(result) == 3  # 聚合仍保留各自 gate_op，只是分在同一 pending 组
-        # 所有单门都在结果中，多量子比特门可以打断 pending
-        gates_in_result = [g["gate"] for g in result]
-        assert "H" in gates_in_result
-        assert "X" in gates_in_result
-        assert "Z" in gates_in_result
+        assert len(result) == 1
+        assert result[0]["gate"] == "FUSED_U3"
+        assert result[0]["targets"] == [0]
+        assert "matrix" in result[0]["params"]
 
     def test_gate_fusion_multi_qubit_gate_flushes_pending(self):
         """多量子比特门（targets 长度 > 1）应清空 pending 缓冲后再插入自身。"""
-        # 使用 targets 长度 > 1 的门（如 SWAP）来触发 pending 清空
         seq = [_h(0), _x(0), _swap(0, 1), _z(0)]
         result = gate_fusion(seq)
-        # SWAP(0,1) 应出现在 X(0) 之后、Z(0) 之前
+        # H(0) 和 X(0) 被融合为 FUSED_U3，SWAP 触发清空，Z(0) 单独保留
         gates = [g["gate"] for g in result]
-        h_idx = gates.index("H")
-        x_idx = gates.index("X")
+        fused_idx = gates.index("FUSED_U3")
         swap_idx = gates.index("SWAP")
         z_idx = gates.index("Z")
-        assert h_idx < x_idx < swap_idx < z_idx
+        assert fused_idx < swap_idx < z_idx
 
     def test_gate_fusion_separate_qubits(self):
         """不同量子比特的单门互不影响。"""

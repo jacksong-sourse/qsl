@@ -101,15 +101,14 @@ class QuantumFourierTransform:
                     state[k] = (a_k + a_j) * inv_sqrt2
                     state[j] = (a_k - a_j) * inv_sqrt2
 
-            # Controlled phase rotations
             for j in range(i + 1, n):
                 mask_j = 1 << j
                 angle = 2 * math.pi / (1 << (j - i + 1))
                 phase = cmath.exp(1j * angle)
+                both_mask = mask_i | mask_j
 
                 for k in range(N):
-                    # Apply phase when both qubits i and j are |1>
-                    if (k & mask_i) and (k & mask_j):
+                    if (k & both_mask) == both_mask:
                         state[k] *= phase
 
         return state

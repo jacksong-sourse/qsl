@@ -1,10 +1,68 @@
-"""Classical GAN with quantum-inspired generator (QGAN)."""
+"""Quantum Generative Adversarial Network (QGAN) with real quantum generator."""
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from typing import Optional
+
+from .layers import QuantumLayer
+
+
+class QuantumGenerator(nn.Module):
+    """
+    True quantum generator using parameterized quantum circuit.
+
+    Uses QuantumLayer to encode latent noise into a quantum state,
+    apply a variational circuit, and measure expectation values.
+    The outputs are probabilities derived from quantum measurements,
+    allowing gradient-based optimization via parameter-shift rule.
+
+    Args:
+        latent_dim: Dimension of latent noise vector
+        data_dim: Dimension of generated data
+        n_qubits: Number of qubits in the quantum circuit
+        n_layers: Number of variational layers in the quantum circuit
+        device: Device to run on ('cpu' or 'cuda')
+    """
+
+    def __init__(self, latent_dim: int, data_dim: int, n_qubits: int = None,
+                 n_layers: int = 2, device: str = 'cpu'):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.data_dim = data_dim
+        self.n_qubits = n_qubits or max(latent_dim, data_dim)
+        self.n_layers = n_layers
+        self.device = device
+        self.N = 1 << self.n_qubits
+
+        self.quantum_layer = QuantumLayer(
+            n_qubits=self.n_qubits,
+            n_features=latent_dim,
+            encoding="angle",
+            n_layers=n_layers
+        ).to(device)
+
+        self.classical_head = nn.Sequential(
+            nn.Linear(self.n_qubits, self.n_qubits),
+            nn.ReLU(),
+            nn.Linear(self.n_qubits, data_dim),
+            nn.Sigmoid()
+        ).to(device)
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        """Generate samples from latent noise using quantum circuit."""
+        quantum_out = self.quantum_layer(z)
+        probs = self.classical_head(quantum_out)
+        samples = torch.bernoulli(probs)
+        return samples
+
+    def sample(self, n_samples: int, device: str = 'cpu') -> np.ndarray:
+        """Generate n_samples from the generator."""
+        self.eval()
+        with torch.no_grad():
+            z = torch.randn(n_samples, self.latent_dim).to(device)
+            return self(z).cpu().numpy()
 
 
 class ClassicalAngularGenerator(nn.Module):
@@ -13,9 +71,7 @@ class ClassicalAngularGenerator(nn.Module):
 
     Note: This is a classical neural network generator that emulates
     a parameterized quantum circuit via sin/cos transformations on
-    learned angles. It is NOT a true quantum circuit executed on a
-    quantum device. For a genuine quantum generator, use a QuantumLayer-based
-    parameterized quantum circuit.
+    learned angles. It is NOT a true quantum circuit.
 
     The generator maps latent noise through a classical neural network
     to produce circuit-like angle parameters, then applies a sinusoidal
@@ -43,8 +99,7 @@ class ClassicalAngularGenerator(nn.Module):
         Convert "circuit" angles to measurement probabilities.
 
         Uses sin^2(theta/2) which corresponds to the probability of
-        measuring |1> after an RX(theta) rotation on |0>. This emulates
-        a parameterized quantum circuit in a differentiable way.
+        measuring |1> after an RX(theta) rotation on |0>.
         """
         batch_size = angles.shape[0]
         angles = angles.view(batch_size, self.n_qubits, 3)
@@ -72,7 +127,7 @@ class ClassicalGenerator(nn.Module):
 
     Uses standard FC layers with no quantum-inspired transformations.
     This serves as a baseline to measure any benefit from the
-    quantum-inspired sinusoidal transformation in QuantumGenerator.
+    quantum generator.
     """
 
     def __init__(self, latent_dim: int, data_dim: int):
@@ -116,23 +171,25 @@ class ClassicalDiscriminator(nn.Module):
 
 class QGAN:
     """
-    Quantum-inspired Generative Adversarial Network.
+    Quantum Generative Adversarial Network.
 
-    Uses a "quantum-inspired" generator (classical neural network with
-    sinusoidal transformations emulating circuit rotations) and a
-    classical discriminator trained adversarially.
+    Uses a true quantum generator (parameterized quantum circuit)
+    and a classical discriminator trained adversarially.
 
-    Note: Despite the name, the generator is a classical neural network
-    that emulates quantum circuit behavior through differentiable
-    trigonometric operations. No actual quantum computation is performed.
+    The quantum generator uses QuantumLayer to encode latent noise
+    into quantum states and apply variational circuits, with gradients
+    computed via parameter-shift rule.
 
     Args:
         latent_dim: Dimension of latent noise vector
         data_dim: Dimension of generated data
-        n_qubits: Number of qubits (default: max(latent_dim, data_dim))
+        n_qubits: Number of qubits in the quantum circuit
         device: Device to run on ('cpu' or 'cuda')
         use_classical: If True, use ClassicalGenerator instead of
-                       the quantum-inspired QuantumGenerator
+                       the quantum generator
+        use_angular: If True, use ClassicalAngularGenerator (quantum-inspired)
+        use_quantum: If True, use QuantumGenerator with parameterized quantum circuit
+        n_layers: Number of variational layers in the quantum circuit
     """
 
     def __init__(self,
@@ -140,15 +197,27 @@ class QGAN:
                  data_dim: int,
                  n_qubits: int = None,
                  device: str = 'cpu',
-                 use_classical: bool = False):
+                 use_classical: bool = False,
+                 use_angular: bool = False,
+                 use_quantum: bool = False,
+                 n_layers: int = 2):
         self.latent_dim = latent_dim
         self.data_dim = data_dim
         self.n_qubits = n_qubits or max(latent_dim, data_dim)
         self.device = device
+        self.n_layers = n_layers
 
         if use_classical:
             self.generator = ClassicalGenerator(
                 latent_dim, data_dim
+            ).to(device)
+        elif use_angular:
+            self.generator = ClassicalAngularGenerator(
+                latent_dim, data_dim, self.n_qubits
+            ).to(device)
+        elif use_quantum:
+            self.generator = QuantumGenerator(
+                latent_dim, data_dim, self.n_qubits, n_layers, device
             ).to(device)
         else:
             self.generator = ClassicalAngularGenerator(
@@ -233,7 +302,3 @@ class QGAN:
     def generate(self, n_samples: int = 100) -> np.ndarray:
         """Alias for sample()."""
         return self.sample(n_samples)
-
-
-# Backward-compatible alias
-QuantumGenerator = ClassicalAngularGenerator
