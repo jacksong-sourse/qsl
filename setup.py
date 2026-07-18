@@ -23,7 +23,7 @@ if os.path.exists(readme_path):
 
 setup(
     name="qsl-quantum",
-    version="0.4.0",
+    version="0.4.1",
     author="Song Ziming",
     author_email="15011462616@163.com",
     description="Quantum Search Language - DSL for Grover search with simulator and IBM Quantum backends",
