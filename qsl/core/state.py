@@ -229,6 +229,64 @@ class QuantumState:
         target_bit_one = (indices & mask) != 0
         self.amplitudes[target_bit_one] *= phase
 
+    def rx(self, target: int, theta: float):
+        """
+        Rotation-X gate: exp(-i * theta/2 * X).
+        
+        RX(theta) = [[cos(theta/2), -i*sin(theta/2)],
+                      [-i*sin(theta/2), cos(theta/2)]]
+        """
+        validate_qubit_index(target, self._n)
+        c = math.cos(theta / 2)
+        s = -1j * math.sin(theta / 2)
+        mask = 1 << target
+        indices = np.arange(self._N)
+        target_bit_zero = (indices & mask) == 0
+        target_bit_one = ~target_bit_zero
+        
+        a_zero = self.amplitudes[target_bit_zero].copy()
+        a_one = self.amplitudes[target_bit_one].copy()
+        
+        self.amplitudes[target_bit_zero] = c * a_zero + s * a_one
+        self.amplitudes[target_bit_one] = s * a_zero + c * a_one
+
+    def ry(self, target: int, theta: float):
+        """
+        Rotation-Y gate: exp(-i * theta/2 * Y).
+        
+        RY(theta) = [[cos(theta/2), -sin(theta/2)],
+                      [sin(theta/2), cos(theta/2)]]
+        """
+        validate_qubit_index(target, self._n)
+        c = math.cos(theta / 2)
+        s = math.sin(theta / 2)
+        mask = 1 << target
+        indices = np.arange(self._N)
+        target_bit_zero = (indices & mask) == 0
+        target_bit_one = ~target_bit_zero
+        
+        a_zero = self.amplitudes[target_bit_zero].copy()
+        a_one = self.amplitudes[target_bit_one].copy()
+        
+        self.amplitudes[target_bit_zero] = c * a_zero - s * a_one
+        self.amplitudes[target_bit_one] = s * a_zero + c * a_one
+
+    def rz(self, target: int, phi: float):
+        """
+        Rotation-Z gate: exp(-i * phi/2 * Z).
+        
+        RZ(phi) = [[exp(-i*phi/2), 0],
+                    [0, exp(i*phi/2)]]
+        """
+        validate_qubit_index(target, self._n)
+        mask = 1 << target
+        indices = np.arange(self._N)
+        target_bit_zero = (indices & mask) == 0
+        target_bit_one = ~target_bit_zero
+        
+        self.amplitudes[target_bit_zero] *= cmath.exp(-1j * phi / 2)
+        self.amplitudes[target_bit_one] *= cmath.exp(1j * phi / 2)
+
     # ----------------------------------------------------------------
     # 两量子比特门
     # ----------------------------------------------------------------
@@ -491,11 +549,14 @@ class QuantumState:
         """
         r = random.random()
         cumulative = 0.0
+        probs = np.array([self.probability(i) for i in range(self._N)])
+        prob_sum = np.sum(probs)
+        if prob_sum > 0:
+            probs = probs / prob_sum
         for i in range(self._N):
-            p = self.probability(i)
-            cumulative += p
+            cumulative += probs[i]
             if r < cumulative:
-                original_p = p
+                original_p = probs[i]
                 result = i
                 if self._readout_error > 0:
                     import random as _random
@@ -891,24 +952,19 @@ class QuantumState:
                 f"readout_error_p must be in [0, 1], got {readout_error_p}"
             )
 
-        # Apply depolarizing noise
+        # Apply depolarizing noise via stochastic Pauli errors
         if depolarizing_p > 0:
-            # Mix with maximally mixed state
-            # |psi'> = sqrt(1-p) * |psi> + sqrt(p/N) * sum e^{i*phi_k} |k>
             import random as _random
-
-            scale = math.sqrt(1.0 - depolarizing_p)
-            noise_scale = math.sqrt(depolarizing_p / self._N)
-
-            for i in range(self._N):
-                # Random phase for the noise component
-                phase = _random.uniform(0, 2 * math.pi)
-                noise_amp = noise_scale * complex(
-                    math.cos(phase), math.sin(phase)
-                )
-                self.amplitudes[i] = scale * self.amplitudes[i] + noise_amp
-
-            self.normalize()
+            # For each qubit, with probability p, apply X, Y, or Z with equal probability
+            for q in range(self._n):
+                if _random.random() < depolarizing_p:
+                    err = _random.choice([0, 1, 2])
+                    if err == 0:
+                        self.x(q)
+                    elif err == 1:
+                        self.y(q)
+                    else:
+                        self.z(q)
 
         # Apply readout error: flipping probability for each qubit
         if readout_error_p > 0:
@@ -950,8 +1006,8 @@ class DensityMatrix:
         validate_n_qubits(n_qubits, 16)
         self._n = n_qubits
         self._N = 1 << n_qubits
-        self._rho = [[0j for _ in range(self._N)] for _ in range(self._N)]
-        self._rho[0][0] = 1.0 + 0j
+        self._rho = np.zeros((self._N, self._N), dtype=complex)
+        self._rho[0, 0] = 1.0 + 0j
 
     @staticmethod
     def from_pure(state: QuantumState) -> 'DensityMatrix':
@@ -960,10 +1016,8 @@ class DensityMatrix:
         dm._n = state.n_qubits
         dm._N = state.size
         validate_n_qubits(dm._n, 16)
-        dm._rho = [[0j for _ in range(dm._N)] for _ in range(dm._N)]
-        for i in range(dm._N):
-            for j in range(dm._N):
-                dm._rho[i][j] = state.amplitudes[i] * state.amplitudes[j].conjugate()
+        amps = state.amplitudes
+        dm._rho = np.outer(amps, amps.conj())
         return dm
 
     @staticmethod
@@ -974,11 +1028,10 @@ class DensityMatrix:
         dm._n = first.n_qubits
         dm._N = first.size
         validate_n_qubits(dm._n, 16)
-        dm._rho = [[0j for _ in range(dm._N)] for _ in range(dm._N)]
+        dm._rho = np.zeros((dm._N, dm._N), dtype=complex)
         for prob, state in states:
-            for i in range(dm._N):
-                for j in range(dm._N):
-                    dm._rho[i][j] += prob * state.amplitudes[i] * state.amplitudes[j].conjugate()
+            amps = state.amplitudes
+            dm._rho += prob * np.outer(amps, amps.conj())
         return dm
 
     @property

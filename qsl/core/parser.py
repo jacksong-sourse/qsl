@@ -273,10 +273,13 @@ class BooleanParser:
             x_match = re.match(r'^x(\d+)$', ident)
             if x_match:
                 return VarExpr(int(x_match.group(1)))
-            # Support arbitrary identifiers as VarExpr with hash-based index
-            # Assign a deterministic integer index from the identifier string
-            idx = sum(ord(c) for c in ident) % (2**31)
-            return VarExpr(idx)
+            # Reject non-xN identifiers with clear error
+            raise BooleanParseError(
+                f"不支持的变量标识符: '{ident}'。"
+                f"支持的格式: x0, x1, x2, ... (x后跟数字)。"
+                f"当前变量: '{ident}'",
+                self.source, self.pos - len(ident)
+            )
 
     def _parse_identifier(self) -> str:
         """

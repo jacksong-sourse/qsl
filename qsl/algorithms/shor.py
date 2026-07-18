@@ -133,8 +133,11 @@ class ShorSolver:
         if M > 1 << 12:
             return self._find_period_classical_fallback(a)
 
+        # Initialize: control register in uniform superposition H^⊗m, target = |1>
         state = np.zeros(M * self.N, dtype=complex)
-        state[1] = 1.0 / np.sqrt(M)
+        inv_sqrt_M = 1.0 / np.sqrt(M)
+        for j in range(M):
+            state[j * self.N + 1] = inv_sqrt_M
 
         for k in range(m):
             power = pow(a, 1 << k, self.N)
@@ -187,7 +190,9 @@ class ShorSolver:
 
     def _find_period_classical_fallback(self, a: int) -> int | None:
         """
-        Classical fallback for period finding when quantum simulation is impractical.
+        Classical period finding using Floyd's cycle detection (tortoise and hare).
+
+        Finds the period r such that a^r ≡ 1 (mod N).
 
         Args:
             a: The base such that gcd(a, N) = 1
@@ -195,35 +200,51 @@ class ShorSolver:
         Returns:
             The period r, or None if not found
         """
-        powers = {}
-        current = 1
-        for r in range(1, min(self.N, 10000)):
-            current = (current * a) % self.N
-            if current in powers:
-                candidate_r = r - powers[current]
-                if self._modular_pow(a, candidate_r, self.N) == 1:
-                    return candidate_r
-            powers[current] = r
-            if current == 1:
-                return r
+        N = self.N
+        # Floyd's cycle detection: tortoise moves 1 step, hare moves 2 steps
+        tortoise = 1
+        hare = 1
+        max_steps = min(N * 2, 100000)
 
-        for _ in range(5):
-            m = 2 * (self.N.bit_length() - 1)
-            M = 1 << m
-            measured = random.randint(0, M - 1)
-            phase = measured / M
+        for _ in range(max_steps):
+            tortoise = (tortoise * a) % N
+            hare = (hare * a) % N
+            hare = (hare * a) % N
 
-            p, q = self._continued_fraction(phase, max_denom=self.N)
-            if q == 0:
-                continue
-            if self._modular_pow(a, q, self.N) == 1:
-                return q
-            for mult in range(1, 10):
-                r_candidate = q * mult
-                if r_candidate > self.N:
-                    break
-                if self._modular_pow(a, r_candidate, self.N) == 1:
-                    return r_candidate
+            if tortoise == hare:
+                # Found a cycle, now find the period
+                mu = 0
+                tortoise2 = 1
+                while tortoise2 != hare:
+                    tortoise2 = (tortoise2 * a) % N
+                    hare = (hare * a) % N
+                    mu += 1
+                    if mu > max_steps:
+                        break
+
+                # Find lambda (period length)
+                lam = 1
+                hare = (tortoise * a) % N
+                while tortoise != hare:
+                    hare = (hare * a) % N
+                    lam += 1
+                    if lam > max_steps:
+                        break
+
+                # Verify period
+                if self._modular_pow(a, lam, N) == 1:
+                    return lam
+
+                # Also try divisors of lam
+                for d in range(1, int(np.sqrt(lam)) + 1):
+                    if lam % d == 0:
+                        if self._modular_pow(a, d, N) == 1:
+                            return d
+                        other = lam // d
+                        if other != d and self._modular_pow(a, other, N) == 1:
+                            return other
+
+                return lam
 
         return None
 
@@ -250,8 +271,8 @@ class ShorSolver:
 
         N = self.N
 
-        if N == 1:
-            return [1]
+        if N <= 1:
+            raise ValueError(f"N must be >= 2 for factorization, got {N}")
 
         if N % 2 == 0:
             result = [2]

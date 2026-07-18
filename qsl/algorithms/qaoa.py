@@ -74,9 +74,9 @@ class QAOA:
                         continue
                     for k in range(self.N):
                         if k & mask_i:
-                            state[k] *= np.exp(1j * gamma * coeff)  # |1> -> Z=-1
+                            state[k] *= np.exp(-1j * gamma * coeff)  # |1> -> Z=-1
                         else:
-                            state[k] *= np.exp(-1j * gamma * coeff)  # |0> -> Z=+1
+                            state[k] *= np.exp(1j * gamma * coeff)  # |0> -> Z=+1
                 elif j > i:
                     # ZZ_{ij} term
                     coeff = self.cost_matrix[i, j]
@@ -84,8 +84,8 @@ class QAOA:
                         continue
                     mask_j = 1 << j
                     for k in range(self.N):
-                        zi = 1.0 if (k & mask_i) else -1.0
-                        zj = 1.0 if (k & mask_j) else -1.0
+                        zi = -1.0 if (k & mask_i) else 1.0
+                        zj = -1.0 if (k & mask_j) else 1.0
                         # Z_i * Z_j = +1 if same, -1 if different
                         zz = zi * zj
                         state[k] *= np.exp(-1j * gamma * coeff * zz)

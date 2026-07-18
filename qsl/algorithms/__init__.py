@@ -35,7 +35,7 @@ except ImportError:
 
 # Grover-based SAT solver
 try:
-    from .grover import solve_sat
+    from ..core.grover import solve_sat
 except ImportError:
     solve_sat = None
 

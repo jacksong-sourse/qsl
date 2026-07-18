@@ -37,6 +37,47 @@ from ..utils.exceptions import (
 from .optimizer import gate_fusion, commutation_optimization, depth_reduction
 
 
+class AlgorithmResult:
+    """
+    Unified result wrapper for all quantum algorithms.
+
+    Provides a consistent interface regardless of the underlying algorithm.
+    """
+    def __init__(self, algorithm: str, data: dict):
+        self.algorithm = algorithm
+        self._data = data
+
+    def __getattr__(self, name):
+        if name in self._data:
+            return self._data[name]
+        raise AttributeError(
+            f"AlgorithmResult for '{self.algorithm}' has no attribute '{name}'. "
+            f"Available: {list(self._data.keys())}"
+        )
+
+    def summary(self) -> str:
+        if self.algorithm == "grover":
+            solutions = self._data.get("solutions", [])
+            return f"Grover: found {len(solutions)} solution(s): {solutions}"
+        elif self.algorithm == "shor":
+            factors = self._data.get("factors", [])
+            return f"Shor: factors = {factors}"
+        elif self.algorithm == "qaoa":
+            energy = self._data.get("optimal_energy", float('nan'))
+            return f"QAOA: optimal energy = {energy:.4f}"
+        elif self.algorithm == "vqe":
+            energy = self._data.get("ground_energy", float('nan'))
+            return f"VQE: ground energy = {energy:.4f}"
+        return f"AlgorithmResult({self.algorithm})"
+
+    def get_solutions(self):
+        """Backward compatibility: return solution list for Grover."""
+        return self._data.get("solutions", [])
+
+    def __repr__(self):
+        return f"AlgorithmResult(algorithm={self.algorithm!r}, data={self._data!r})"
+
+
 class QSLCompiler:
     """
     QSL 编译器。
@@ -102,11 +143,14 @@ class QSLCompiler:
         if algorithm == "grover":
             return self._run_grover(program, backend, **run_options)
         elif algorithm == "shor":
-            return self._run_shor(program, **run_options)
+            result = self._run_shor(program, **run_options)
+            return AlgorithmResult("shor", {"factors": result, "N": result[0] if result else 0})
         elif algorithm == "qaoa":
-            return self._run_qaoa(program, **run_options)
+            result = self._run_qaoa(program, **run_options)
+            return AlgorithmResult("qaoa", {"params": result[0], "optimal_energy": result[1]})
         elif algorithm == "vqe":
-            return self._run_vqe(program, **run_options)
+            result = self._run_vqe(program, **run_options)
+            return AlgorithmResult("vqe", {"ground_energy": result[0], "ground_state": result[1]})
         else:
             raise ProgramValidationError(
                 "main_algorithm", algorithm,
@@ -211,15 +255,15 @@ class QSLCompiler:
             except ValueError:
                 pass
 
-        qaoa = QAOA(cost_matrix=cost_matrix)
-        result = qaoa.optimize()
+        qaoa = QAOA(n_qubits, cost_matrix)
+        params, energy = qaoa.optimize()
 
         if self.verbose:
             print(f"  量子比特数: {n_qubits}")
-            print(f"  最优能量: {result.optimal_energy:.4f}")
-            print(f"  最优比特串: {result.optimal_bitstring}")
+            print(f"  最优能量: {energy:.4f}")
+            print(f"  最优参数: {params}")
 
-        return result
+        return params, energy
 
     def _run_vqe(self, program: QSLProgram, **run_options):
         """执行 VQE 算法。"""
@@ -235,13 +279,18 @@ class QSLCompiler:
         else:
             molecule = "h2"
 
-        vqe = VQE(n_qubits=n_qubits, molecule=molecule)
+        if molecule.lower() == "h2":
+            hamiltonian = VQE.h2_hamiltonian()
+        else:
+            hamiltonian = VQE.h2_hamiltonian()
+
+        vqe = VQE(n_qubits=min(n_qubits, 4), hamiltonian_pauli_terms=hamiltonian)
         result = vqe.optimize()
 
         if self.verbose:
             print(f"  量子比特数: {n_qubits}")
             print(f"  分子: {molecule}")
-            print(f"  基态能量: {result.ground_energy:.4f}")
+            print(f"  基态能量: {result[0]:.4f}")
 
         return result
 

@@ -1,5 +1,12 @@
 """QSL Quantum Machine Learning (QML) package."""
 
+import warnings
+
+_IMPORT_ERROR_MESSAGE = (
+    "QML module requires torch, numpy, scipy, scikit-learn. "
+    "Install: pip install qsl-quantum[qml] or pip install qsl-quantum[full]"
+)
+
 try:
     from .layers import QuantumLayer
     from .qnn import QNN
@@ -7,9 +14,14 @@ try:
     from .qsvm import QuantumSVM
     from .qgan import QGAN
 except ImportError as e:
-    raise ImportError(
-        "QML module requires torch, numpy, scipy, scikit-learn. "
-        "Install: pip install torch scipy scikit-learn"
-    ) from e
+    warnings.warn(
+        f"QML modules not available: {e}. Install with: pip install qsl-quantum[qml]",
+        ImportWarning
+    )
+    QuantumLayer = None
+    QNN = None
+    quantum_kernel = None
+    QuantumSVM = None
+    QGAN = None
 
 __all__ = ["QuantumLayer", "QNN", "quantum_kernel", "QuantumSVM", "QGAN"]

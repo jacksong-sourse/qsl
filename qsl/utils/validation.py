@@ -75,7 +75,7 @@ def validate_qubit_indices(indices: List[int], n_qubits: int,
         validate_qubit_index(idx, n_qubits)
     # 检查重复
     if len(indices) != len(set(indices)):
-        duplicates = [idx for idx in indices if indices.count(idx) > 1]
+        duplicates = list({idx for idx in indices if indices.count(idx) > 1})
         raise DuplicateQubitError(duplicates)
     return indices
 
