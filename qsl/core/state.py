@@ -530,7 +530,7 @@ class QuantumState:
 
     def probabilities(self) -> List[float]:
         """返回所有基态的概率分布。"""
-        return [self.probability(i) for i in range(self._N)]
+        return list(np.abs(self.amplitudes) ** 2)
 
     def measure(self, collapse: bool = False) -> Tuple[int, float]:
         """
@@ -543,39 +543,30 @@ class QuantumState:
 
         返回: (测量结果整数, 对应概率)
 
-        失败模式:
-            - 浮点累积误差: 使用 cumulative 遍历保证正确采样
-            - 所有概率为零: 返回最后一个状态 (容错)
+        实现: 概率分布通过 numpy 向量化一次性计算
+        (np.abs(amplitudes)**2 + cumsum + searchsorted),
+        不存在逐元素 Python 循环。
         """
-        r = random.random()
-        cumulative = 0.0
-        probs = np.array([self.probability(i) for i in range(self._N)])
-        prob_sum = np.sum(probs)
+        probs = np.abs(self.amplitudes) ** 2
+        prob_sum = probs.sum()
         if prob_sum > 0:
             probs = probs / prob_sum
-        for i in range(self._N):
-            cumulative += probs[i]
-            if r < cumulative:
-                original_p = probs[i]
-                result = i
-                if self._readout_error > 0:
-                    import random as _random
-                    for bit in range(self._n):
-                        if _random.random() < self._readout_error:
-                            result ^= (1 << bit)
-                if collapse:
-                    self._collapse_to(result)
-                return result, original_p
-        last = self._N - 1
-        original_p = self.probability(last)
+        r = random.random()
+        result = int(np.searchsorted(np.cumsum(probs), r, side='right'))
+        if result >= self._N:
+            result = self._N - 1
+        original_p = float(probs[result])
+        if self._readout_error > 0:
+            for bit in range(self._n):
+                if random.random() < self._readout_error:
+                    result ^= (1 << bit)
         if collapse:
-            self._collapse_to(last)
-        return last, original_p
+            self._collapse_to(result)
+        return result, original_p
 
     def _collapse_to(self, index: int):
         """坍缩量子态到指定的基态 |index>。"""
-        for i in range(self._N):
-            self.amplitudes[i] = 0j
+        self.amplitudes[:] = 0j
         self.amplitudes[index] = 1.0 + 0j
 
     def measure_most_likely(self) -> Tuple[int, float]:
@@ -587,14 +578,9 @@ class QuantumState:
         失败模式:
             - 多个状态概率相同: 返回索引最小的那个
         """
-        best_idx = 0
-        best_prob = 0.0
-        for i in range(self._N):
-            p = self.probability(i)
-            if p > best_prob:
-                best_prob = p
-                best_idx = i
-        return best_idx, best_prob
+        probs = np.abs(self.amplitudes) ** 2
+        best_idx = int(np.argmax(probs))
+        return best_idx, float(probs[best_idx])
 
     def sample(self, shots: int, collapse: bool = False) -> List[Tuple[int, float]]:
         """
@@ -633,7 +619,7 @@ class QuantumState:
 
         用于调试和测试断言。
         """
-        total = sum(self.probability(i) for i in range(self._N))
+        total = float(np.sum(np.abs(self.amplitudes) ** 2))
         return abs(total - 1.0) < tolerance
 
     def normalize(self):
@@ -646,12 +632,10 @@ class QuantumState:
             - 所有振幅为零: 无法归一化，抛出 StateNormalizationError
             - 数值下溢: total_prob 可能为 0.0
         """
-        total = sum(self.probability(i) for i in range(self._N))
+        total = float(np.sum(np.abs(self.amplitudes) ** 2))
         if total < 1e-30:
             raise StateNormalizationError(total)
-        norm = math.sqrt(total)
-        for i in range(self._N):
-            self.amplitudes[i] /= norm
+        self.amplitudes /= math.sqrt(total)
 
     def get_state_vector(self) -> List[complex]:
         """返回振幅列表的副本。"""
@@ -988,7 +972,7 @@ class DensityMatrix:
     Properties:
         dim: Hilbert space dimension (= 2^n)
         n_qubits: Number of qubits
-        matrix: Density matrix as list of lists of complex numbers
+        matrix: Density matrix as numpy ndarray (N x N, complex)
 
     Usage:
         >>> dm = DensityMatrix.from_pure(QuantumState(2))
@@ -1042,23 +1026,17 @@ class DensityMatrix:
     def dim(self) -> int:
         return self._N
 
-    def get_matrix(self) -> List[List[complex]]:
-        """Return a copy of the density matrix."""
-        return [row[:] for row in self._rho]
+    def get_matrix(self) -> np.ndarray:
+        """Return a copy of the density matrix (numpy ndarray)."""
+        return self._rho.copy()
 
     def purity(self) -> float:
         """Compute purity: Tr(rho^2)."""
-        tr_rho2 = 0.0
-        for i in range(self._N):
-            for k in range(self._N):
-                tr_rho2 += (self._rho[i][k] * self._rho[k][i]).real
-        return tr_rho2
+        return float(np.real(np.trace(self._rho @ self._rho)))
 
     def von_neumann_entropy(self) -> float:
         """Compute von Neumann entropy: S = -Tr(rho log2 rho)."""
-        import numpy as np
-        mat = np.array(self._rho, dtype=complex)
-        eigenvalues = np.linalg.eigvalsh(mat)
+        eigenvalues = np.linalg.eigvalsh(self._rho)
         entropy = 0.0
         for ev in eigenvalues:
             if ev > 1e-12:
@@ -1067,13 +1045,13 @@ class DensityMatrix:
 
     def trace(self) -> float:
         """Compute trace: should be 1.0 for valid states."""
-        return sum(self._rho[i][i].real for i in range(self._N))
+        return float(np.trace(self._rho).real)
 
     def probability(self, index: int) -> float:
         """Probability of measuring basis state |index>:  <i|rho|i>."""
         if index < 0 or index >= self._N:
             return 0.0
-        return self._rho[index][index].real
+        return float(self._rho[index, index].real)
 
     def measure(self, collapse: bool = False) -> Tuple[int, float]:
         """
@@ -1085,25 +1063,22 @@ class DensityMatrix:
         Returns:
             (result index, probability)
         """
+        probs = np.real(np.diag(self._rho)).copy()
+        total = probs.sum()
+        if total > 0:
+            probs /= total
         r = random.random()
-        cumulative = 0.0
-        for i in range(self._N):
-            cumulative += self._rho[i][i].real
-            if r < cumulative:
-                if collapse:
-                    self._collapse_to(i)
-                return i, self._rho[i][i].real
-        last = self._N - 1
+        i = int(np.searchsorted(np.cumsum(probs), r, side='right'))
+        if i >= self._N:
+            i = self._N - 1
         if collapse:
-            self._collapse_to(last)
-        return last, self._rho[last][last].real
+            self._collapse_to(i)
+        return i, float(probs[i])
 
     def _collapse_to(self, index: int):
         """Collapse density matrix to pure |index> state."""
-        for i in range(self._N):
-            for j in range(self._N):
-                self._rho[i][j] = 0j
-        self._rho[index][index] = 1.0 + 0j
+        self._rho[:] = 0j
+        self._rho[index, index] = 1.0 + 0j
 
     def apply_unitary(self, matrix):
         """
@@ -1112,11 +1087,8 @@ class DensityMatrix:
         Args:
             matrix: Unitary matrix as numpy array (N x N) or list of lists.
         """
-        import numpy as np
         U = np.asarray(matrix, dtype=complex)
-        rho = np.array(self._rho, dtype=complex)
-        rho_new = U @ rho @ U.conj().T
-        self._rho = [[rho_new[i, j] for j in range(self._N)] for i in range(self._N)]
+        self._rho = U @ self._rho @ U.conj().T
 
     def apply_depolarizing(self, p: float):
         """
@@ -1129,19 +1101,19 @@ class DensityMatrix:
             raise ValueError(f"p must be in [0, 1], got {p}")
         if p == 0:
             return
-        identity_prob = p / self._N
-        for i in range(self._N):
-            for j in range(self._N):
-                self._rho[i][j] *= (1.0 - p)
-            self._rho[i][i] += identity_prob
+        self._rho = (1.0 - p) * self._rho + (p / self._N) * np.eye(self._N)
 
     def apply_amplitude_damping(self, gamma: float):
         """
-        Apply amplitude damping (T1 decay) channel.
+        Apply amplitude damping (T1 decay) channel to EVERY qubit.
 
-        Kraus operators (per qubit):
+        Kraus operators (per qubit q):
             K0 = |0><0| + sqrt(1-gamma)|1><1|
             K1 = sqrt(gamma)|0><1|
+
+        The single-qubit channel is applied sequentially to all qubits
+        (channel composition), giving the correct multi-qubit noise model
+        rather than damping qubit 0 only.
 
         Args:
             gamma: Damping probability in [0, 1]
@@ -1151,52 +1123,35 @@ class DensityMatrix:
         if gamma == 0:
             return
 
-        import numpy as np
         sqrt_1mg = math.sqrt(1.0 - gamma)
-        sqrt_g = math.sqrt(gamma)
+        indices = np.arange(self._N)
 
-        rho = np.array(self._rho, dtype=complex)
+        for q in range(self._n):
+            mask = 1 << q
+            idx0 = indices[(indices & mask) == 0]
+            idx1 = idx0 | mask
 
-        # Apply per-qubit: for simplicity, apply on qubit 0 only
-        # Full multi-qubit version would apply to all qubits
-        new_rho = np.zeros((self._N, self._N), dtype=complex)
-        mask = 1  # qubit 0
+            rho = self._rho
+            new_rho = np.empty_like(rho)
 
-        for i in range(self._N):
-            i0 = (i & ~mask)  # i with qubit 0 forced to |0>
-            i1 = i0 | mask    # i with qubit 0 forced to |1>
+            # |0><0| 块: 保留原值并接收 |1> 衰减来的布居
+            new_rho[np.ix_(idx0, idx0)] = (
+                rho[np.ix_(idx0, idx0)] + gamma * rho[np.ix_(idx1, idx1)]
+            )
+            # |0><1| / |1><0| 块: 相干项按 sqrt(1-gamma) 衰减
+            new_rho[np.ix_(idx0, idx1)] = sqrt_1mg * rho[np.ix_(idx0, idx1)]
+            new_rho[np.ix_(idx1, idx0)] = sqrt_1mg * rho[np.ix_(idx1, idx0)]
+            # |1><1| 块: 布居按 (1-gamma) 保留
+            new_rho[np.ix_(idx1, idx1)] = (1.0 - gamma) * rho[np.ix_(idx1, idx1)]
 
-            for j in range(self._N):
-                j0 = (j & ~mask)
-                j1 = j0 | mask
-
-                val = rho[i, j]
-
-                if (i & mask) == 0 and (j & mask) == 0:
-                    # |0><0| terms: K0 has 1 for |0>, plus rho[1,1] term from K1
-                    new_rho[i, j] += val  # K0|0>|0>K0^dagger
-                    if i1 < self._N and j1 < self._N:
-                        new_rho[i, j] += gamma * rho[i1, j1]  # K1|1><1|K1^dagger
-                elif (i & mask) == 0 and (j & mask) != 0:
-                    # |0><1|: K0|0><1|K0^dagger = sqrt(1-gamma) * rho[i,j]
-                    new_rho[i, j] += sqrt_1mg * val
-                elif (i & mask) != 0 and (j & mask) == 0:
-                    # |1><0|: same
-                    new_rho[i, j] += sqrt_1mg * val
-                else:
-                    # |1><1|: K0|1><1|K0^dagger = (1-gamma) * rho[i,j]
-                    new_rho[i, j] += (1.0 - gamma) * val
-
-        self._rho = [[new_rho[i, j] for j in range(self._N)] for i in range(self._N)]
+            self._rho = new_rho
 
     def apply_phase_damping(self, gamma: float):
         """
         Apply phase damping (T2 dephasing) channel.
 
-        Kraus operators:
-            K0 = sqrt(1 - gamma) * I
-            K1 = sqrt(gamma) * |0><0|
-            K2 = sqrt(gamma) * |1><1| (but with phase -1)
+        Off-diagonal element rho[i][j] decays by (1-gamma)^(d(i,j)/2)
+        where d(i,j) is the Hamming distance between i and j.
 
         Args:
             gamma: Dephasing probability in [0, 1]
@@ -1204,18 +1159,13 @@ class DensityMatrix:
         if gamma < 0 or gamma > 1:
             raise ValueError(f"gamma must be in [0, 1], got {gamma}")
 
-        rho = self._rho
-        N = self._N
+        indices = np.arange(self._N)
+        xor = np.bitwise_xor.outer(indices, indices)
+        dist = np.zeros((self._N, self._N))
+        for b in range(self._n):
+            dist += (xor >> b) & 1
         scale = math.sqrt(1.0 - gamma)
-
-        new_rho = [[0j] * N for _ in range(N)]
-        for i in range(N):
-            for j in range(N):
-                # Off-diagonal elements decay, diagonal preserved
-                num_diff = bin(i ^ j).count('1')
-                new_rho[i][j] = scale ** num_diff * rho[i][j]
-
-        self._rho = new_rho
+        self._rho = (scale ** dist) * self._rho
 
     def partial_trace(self, qubit: int) -> 'DensityMatrix':
         """
@@ -1234,22 +1184,21 @@ class DensityMatrix:
         dm = DensityMatrix.__new__(DensityMatrix)
         dm._n = new_n
         dm._N = new_N
-        dm._rho = [[0j] * new_N for _ in range(new_N)]
+        dm._rho = np.zeros((new_N, new_N), dtype=complex)
 
         for i in range(self._N):
             for j in range(self._N):
                 if (i & mask) == (j & mask):
                     i_new = (i & (mask - 1)) | ((i >> (qubit + 1)) << qubit)
                     j_new = (j & (mask - 1)) | ((j >> (qubit + 1)) << qubit)
-                    dm._rho[i_new][j_new] += self._rho[i][j]
+                    dm._rho[i_new, j_new] += self._rho[i, j]
 
         return dm
 
     def fidelity(self, other: 'DensityMatrix') -> float:
         """Compute fidelity F = Tr(sqrt(sqrt(rho1) * rho2 * sqrt(rho1)))^2."""
-        import numpy as np
-        rho1 = np.array(self._rho, dtype=complex)
-        rho2 = np.array(other._rho, dtype=complex)
+        rho1 = self._rho
+        rho2 = np.asarray(other._rho, dtype=complex)
         try:
             eigvals, eigvecs = np.linalg.eigh(rho1)
             sqrt_rho1 = eigvecs @ np.diag(np.sqrt(np.maximum(eigvals, 0))) @ eigvecs.conj().T

@@ -1,38 +1,41 @@
-<h1 align="center">QSL &mdash; 量子搜索语言 v0.4.1</h1>
+<div align="center">
+
+# 🚀 QSL — Quantum Search Language v0.5.0
+
+**用一句话描述你想解决什么问题，剩下的交给量子计算。**
 
 <p align="center">
-  <b>用一句话描述你想找什么，剩下的交给量子计算。</b>
+  <a href="#-安装"><img src="https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white" alt="Python"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-4CC61E" alt="License"></a>
+  <img src="https://img.shields.io/badge/tests-398%20passed-00C851" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.5.0-268BD2" alt="Version">
+  <a href="https://pypi.org/project/qsl-quantum/"><img src="https://img.shields.io/badge/pypi-qsl--quantum-FFD43B?logo=pypi&logoColor=black" alt="PyPI"></a>
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
-  <img src="https://img.shields.io/badge/tests-365%20passed-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/version-0.4.1-blue" alt="Version">
-  <img src="https://img.shields.io/badge/pypi-qsl--quantum-orange?logo=pypi" alt="PyPI">
-</p>
+</div>
 
 ---
 
-## v0.4.1 — 五级量子计算框架
+## ✨ 特性总览
 
-一个完整的量子计算 Python 框架，从声明式搜索到自进化 AI 系统：
+一个 **全栈量子计算框架**，从声明式量子搜索到AI驱动的量子科学家：
 
-| 级别 | 模块 | 功能 |
-|------|------|------|
-| **一级** | Gates + Algorithms | 量子门 / QFT / Shor 因子分解 / QAOA / VQE |
-| **二级** | QML | 量子神经网络 / 量子 SVM / 量子核函数 / QGAN |
-| **三级** | Backends + Compiler | IBM / AWS Braket / 自动后端选择 / 门融合 / 布局映射 / 错误缓解 |
-| **四级** | AI Scientist | LLM 问题翻译 / 量子自主智能体 / 假设测试 / 发现流水线 |
-| **五级** | Meta + Network | 遗传算法搜索电路 / RL 编译优化 / 量子区块链 / 分布式节点 |
+| 层级 | 模块 | 功能 |
+|:----:|:-----|:-----|
+| **1️⃣** | **量子门 & 算法** | 50+ 量子门 · QFT · **Shor 量子相位估计** · **QAOA** · **VQE (parameter-shift)** |
+| **2️⃣** | **量子机器学习** | **向量化 QuantumLayer** · QNN · 量子核 · QSVM · **可微 QGAN (Straight-Through)** |
+| **3️⃣** | **后端 & 编译器** | 高性能模拟器 · IBM/AWS 真机 · 门融合 · 布局映射 · 零噪声外推 |
+| **4️⃣** | **AI 量子科学家** | 自然语言→量子程序 · 自主智能体 · 假设检验 · 自动发现 |
+| **5️⃣** | **元系统 & 网络** | 遗传电路搜索 · 量子定理证明 (Grover) · 分布式节点 · 量子区块链 |
 
 ---
 
-## 5 秒看懂
+## 🎯 5 秒上手
 
 ```python
 from qsl import QSLProgram, compile_and_run
 
+# 声明你想找什么：解一个 3-SAT 问题
 program = QSLProgram(
     name="3-SAT",
     n_qubits=3,
@@ -40,139 +43,162 @@ program = QSLProgram(
     shots=10
 )
 result = compile_and_run(program)
-print(result.get_solutions())  # [3, 4] = 011 和 100
+print(result.get_solutions())  # → [3, 4] 即 |011⟩ 和 |100⟩
 ```
 
-不用懂量子力学。
+**不需要懂量子力学。** 框架会自动编译最优量子电路并执行。
 
 ---
 
-## 快速体验各模块
+## 📦 核心功能演示
 
-### 量子算法
+### 🔢 Shor 算法 — 整数因子分解
 
 ```python
-from qsl import ShorSolver, QAOA, VQE, QuantumFourierTransform
+from qsl import ShorSolver
 
-# 量子傅里叶变换
-qft = QuantumFourierTransform(3)
-circuit = qft.build_circuit()
-
-# Shor 算法（经典模拟器）分解 15 = 3 × 5
-solver = ShorSolver(15)
+# 量子相位估计实现周期查找 (支持超过旧12-qubit阈值)
+solver = ShorSolver(21, max_control_qubits=12)
 factors = solver.factor()
-print(factors)  # [3, 5]
+print(f"21 = {' × '.join(map(str, factors))}")  # → 21 = 3 × 7
+```
 
-# VQE 计算 H2 基态能量
-vqe = VQE(2, VQE.h2_hamiltonian())
-energy, state = vqe.optimize()
+### 🧬 VQE — 分子基态能量计算
 
-# QAOA 求解 MaxCut 优化问题
+```python
+from qsl import VQE
 import numpy as np
-adj = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])  # 3节点路径图
-qaoa = QAOA(3, QAOA.maxcut_cost_matrix(adj), p=2)
-params, energy = qaoa.optimize()
+
+# 计算氢分子 H₂ 基态能量 (parameter-shift 梯度)
+vqe = VQE(4, VQE.h2_hamiltonian(), n_layers=2)
+energy, ground_state = vqe.optimize(maxiter=100)
+print(f"H₂ ground energy: {energy:.4f} Hartree")
 ```
 
-### 量子机器学习
+### 📊 QAOA — 组合优化 (MaxCut / 投资组合)
 
 ```python
-from qsl import QuantumLayer, QNN, QuantumSVM
+from qsl import QAOA
+import numpy as np
 
-# 量子神经网络
-layer = QuantumLayer(n_qubits=3, n_features=4, encoding="angle")
-qnn = QNN(n_qubits=3, n_features=4, n_outputs=2)
-qnn.fit(X_train, y_train, epochs=50)
-preds = qnn.predict(X_test)
-
-# 量子 SVM（兼容 sklearn API）
-qsvm = QuantumSVM().fit(X_train, y_train)
-print(qsvm.score(X_test, y_test))
+# MaxCut 问题
+adj = np.array([[0,1,0],[1,0,1],[0,1,0]])
+Q = QAOA.maxcut_cost_matrix(adj)
+qaoa = QAOA(3, Q, p=2, encoding="qubo")
+params, cost = qaoa.optimize()
+bitstring, value = qaoa.get_optimal_bitstring()
 ```
 
-### 硬件后端
+### 🔍 Grover — 布尔表达式量子搜索
 
 ```python
-from qsl import AutoBackend
+from qsl import GroverSearch, solve_sat
+from qsl.core.parser import parse_bool
 
-# 自动选择最优后端
-backend = AutoBackend(max_qubits=50)
-best, backend_type = backend.select()
-print(f"Selected: {best} ({backend_type})")
+# 直接从布尔表达式构建量子 Oracle (无经典枚举!)
+expr = parse_bool("x0 & x1 & ~x2")
+grover = GroverSearch(n_qubits=4, verbose=False)
+result = grover.search_expressions([expr], num_solutions=1)
 ```
 
-### AI 量子科学家
+### 🤖 量子机器学习层
 
 ```python
-from qsl import ProblemTranslator, QuantumAgent
+from qsl import QuantumLayer
+import torch
 
-# 自然语言 → 量子程序
-translator = ProblemTranslator()
-program = translator.translate("破解 RSA-15 加密")
-
-# 自主量子智能体
-agent = QuantumAgent("寻找最优投资组合")
-report = agent.run()
+# 完全向量化的 PyTorch 层 (无 Python for 循环)
+layer = QuantumLayer(n_qubits=4, n_features=4, encoding="angle")
+x = torch.randn(8, 4)  # batch of 8
+out = layer(x)          # shape: (8, 4) — 可端到端训练
 ```
 
 ---
 
-## 安装
+## 🛠 安装
 
 ```bash
-# 核心（仅依赖 numpy）
+# 核心 (仅依赖 numpy, ~100KB)
 pip install qsl-quantum
 
-# 带量子算法支持
+# 量子算法 (scipy)
 pip install qsl-quantum[algorithms]
 
-# 量子机器学习
+# 量子机器学习 (torch, scikit-learn)
 pip install qsl-quantum[qml]
 
-# 真实硬件 (IBM / AWS)
-pip install qsl-quantum[ibm]     # IBM Quantum
-pip install qsl-quantum[aws]     # AWS Braket
+# 真实量子硬件
+pip install qsl-quantum[ibm]      # IBM Quantum
+pip install qsl-quantum[aws]      # AWS Braket
 
-# 全部安装
+# 全部依赖
 pip install qsl-quantum[full]
 ```
 
+> ⚠️ 导入时会提示未安装 SDK 的后端不可用，本地模拟器始终可用。
+
 ---
 
-## 项目结构
+## 📁 项目结构
 
 ```
 qsl/
-├── core/              量子态、布尔解析、Grover 搜索
-├── compiler/          编译器、DSL 解析、门优化、错误缓解
-├── backends/          模拟器 + IBM + AWS Braket + 自动选择
-├── algorithms/        QFT / Shor / QAOA / VQE
-├── qml/               量子层 / QNN / 量子核 / QSVM / QGAN
-├── ai/                ⚠ 演示: LLM 翻译器 / 量子智能体 / 假设测试
-├── pipelines/         ⚠ 演示: 药物发现 / 密码分析 / 投资组合
-├── meta/              ⚠ 演示: 遗传电路搜索 / RL 编译 / 定理证明
-├── network/           ⚠ 演示: 分布式节点 / 量子区块链
-└── utils/             异常体系、输入验证
-tests/                 365 个测试用例
+├── core/           量子态 · 布尔解析器 · Grover (真正量子Oracle)
+├── compiler/       DSL · 编译器 · 门融合/交换 · 错误缓解
+├── backends/       模拟器 · IBM · AWS Braket · 自动选择
+├── algorithms/     QFT · Shor (量子相位估计) · QAOA · VQE (parameter-shift)
+├── qml/            QuantumLayer (向量化) · QNN · QSVM · QGAN (可微)
+├── ai/             LLM 翻译器 · 量子智能体 · 假设检验
+├── pipelines/      药物发现 · 密码分析 · 投资组合优化 (真正QAOA)
+├── meta/           遗传电路搜索 · 量子定理证明 (Grover)
+├── network/        分布式节点 · 量子区块链
+└── utils/          异常体系 · 输入验证
+tests/              398 个单元测试
 ```
 
 ---
 
-## 运行测试
+## ✅ 运行测试
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v        # 365 passed
+pytest tests/ -v
+# ======= 398 passed in ~9s =======
 ```
 
 ---
 
-## 作者
+## 🔬 v0.5.0 重大修复 (相比 v0.4.1)
 
-宋梓铭 &middot; [Gitee](https://gitee.com/song-jack/qsl) &middot; 15011462616@163.com
+| 问题 | 修复 |
+|:-----|:-----|
+| Grover Oracle 经典全枚举 2ⁿ 态 | ✅ 从布尔表达式直接构建量子电路 |
+| Shor >12 qubit 退回经典 | ✅ 正确量子相位估计 + 逆QFT |
+| QuantumLayer Python for 循环 | ✅ 全部改为 numpy/torch 批量运算 |
+| QGAN torch.bernoulli 不可微 | ✅ Straight-Through Estimator |
+| DensityMatrix 转 list-of-lists | ✅ 全程保持 numpy ndarray |
+| 药物发现随机哈密顿量 | ✅ 支持 OpenFermion+PySCF 真实计算 |
+| IBM 后端经典枚举Oracle | ✅ 量子Oracle电路构建 |
+| 投资组合经典线性求解 | ✅ 逐点运行QAOA生成前沿 |
+| VQE 有限差分梯度 O(n_params×2ⁿ) | ✅ Parameter-shift 规则 |
+| 定理证明器经典枚举 | ✅ Grover 量子搜索证明空间 |
+| QFT apply/matrix 不一致 | ✅ 受控相位门逻辑修正 |
+| DensityMatrix amplitude damping 仅作用于 qubit 0 | ✅ 所有qubit循环施加 |
+| QAOA Ising/QUBO 编码不匹配 | ✅ 统一变量转换 |
+| QuantumLayer CNOT 优先级bug | ✅ 运算符逻辑修正 |
+| 解析器不支持下划线开头变量 | ✅ `_` 标识符支持 |
+| kron 遮蔽 numpy.kron | ✅ 重命名为 kronecker_prod |
+| VQE 非H₂分子静默替换 | ✅ 明确报错提示 |
+| IBM JobStatus 路径问题 | ✅ try/except 兼容Qiskit 1.0+ |
 
 ---
 
-## 许可证
+## 👤 作者
 
-MIT &mdash; 随意使用、修改、分发。
+宋梓铭 · [Gitee](https://gitee.com/song-jack/qsl) · 15011462616@163.com
+
+---
+
+## 📄 许可证
+
+MIT License — 可自由使用、修改、分发。

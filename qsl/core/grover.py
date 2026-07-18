@@ -29,9 +29,12 @@ Grover 量子搜索算法实现。
 """
 
 import math
+import random
 from typing import Callable, List, Optional, Tuple, Set
 
 from .state import QuantumState, MAX_QUBITS
+from .oracle import OracleCircuit, compile_phase_oracle
+from .parser import BooleanExpr, VarExpr, NotExpr, OrExpr, AndExpr
 from ..utils.validation import validate_n_qubits, validate_shots
 from ..utils.exceptions import NoSolutionError
 
@@ -137,6 +140,182 @@ class GroverSearch:
         return sum(1 for x in range(self.N) if condition(x))
 
     # ----------------------------------------------------------------
+    # 量子 Oracle 电路 (布尔表达式直接编译, 无经典枚举)
+    # ----------------------------------------------------------------
+
+    @staticmethod
+    def _apply_oracle_circuit(state: QuantumState, circ: OracleCircuit):
+        """将编译后的相位 Oracle 电路作用到量子态上。"""
+        for gate, qs in circ.gates:
+            if gate == "X":
+                state.x(qs[0])
+            elif gate == "Z":
+                state.z(qs[0])
+            elif gate == "CNOT":
+                state.cnot(qs[0], qs[1])
+            elif gate == "TOFFOLI":
+                state.toffoli(qs[0], qs[1], qs[2])
+            else:
+                raise ValueError(f"未知的 Oracle 门: {gate}")
+
+    @staticmethod
+    def _apply_diffusion_main(state: QuantumState, n_main: int):
+        """仅在主寄存器上应用 Grover 扩散算子 (ancilla 不受影响)。"""
+        qs = list(range(n_main))
+        for q in qs:
+            state.h(q)
+            state.x(q)
+        state.mcz(qs)
+        for q in qs:
+            state.x(q)
+            state.h(q)
+
+    def _run_grover_iterations(self, iterations: int,
+                                circ: OracleCircuit) -> QuantumState:
+        """制备叠加态并执行指定次数的 Grover 迭代 (电路 Oracle)。"""
+        total_qubits = self.n + circ.n_ancilla
+        state = QuantumState(total_qubits)
+        for q in range(self.n):
+            state.h(q)
+        for _ in range(iterations):
+            self._apply_oracle_circuit(state, circ)
+            self._apply_diffusion_main(state, self.n)
+        return state
+
+    def search_expressions(self,
+                           expressions: List[BooleanExpr],
+                           num_solutions: Optional[int] = None,
+                           shots: int = 1) -> 'GroverResult':
+        """
+        使用量子 Oracle 电路执行 Grover 搜索 (无经典枚举)。
+
+        Oracle 由布尔表达式 AST 直接编译为 X/CNOT/Toffoli/Z 可逆电路,
+        不遍历 2^n 个基态。当 num_solutions 未知 (None) 时,
+        使用 BBHT 指数搜索自动确定迭代次数, 期望查询复杂度 O(√(N/M)),
+        无需任何 O(N) 经典预处理。
+
+        参数:
+            expressions: BooleanExpr 列表 (逻辑与关系)
+            num_solutions: 已知解数量 (None 则使用 BBHT 搜索)
+            shots: 测量次数
+
+        返回:
+            GroverResult (BBHT 路径下 num_solutions 为 None,
+            quantum_queries 记录实际 Oracle 查询次数)
+
+        失败模式:
+            - 无解: BBHT 耗尽预算后抛出 NoSolutionError
+            - 表达式变量索引越界: 抛出 ValueError
+        """
+        validate_shots(shots)
+        if not expressions:
+            raise ValueError("expressions 不能为空")
+
+        circ = compile_phase_oracle(expressions, self.n)
+        total_qubits = self.n + circ.n_ancilla
+        if total_qubits > MAX_QUBITS:
+            raise ValueError(
+                f"表达式需要 {circ.n_ancilla} 个 ancilla, 总量子比特数 "
+                f"{total_qubits} 超过模拟上限 {MAX_QUBITS}"
+            )
+
+        def _is_solution(x: int) -> bool:
+            return all(e.evaluate(x) for e in expressions)
+
+        if num_solutions is not None:
+            # 已知 M: 直接计算最优迭代次数
+            M = num_solutions
+            if M == 0:
+                raise NoSolutionError(
+                    premises=[e.to_string() for e in expressions],
+                    n_qubits=self.n,
+                )
+            t_opt, theta, theory_prob = self._compute_optimal_iterations(
+                self.N, M)
+            state = self._run_grover_iterations(t_opt, circ)
+            measurements = self._measure_state(state, shots, _is_solution)
+            result = GroverResult(
+                n_qubits=self.n,
+                num_solutions=M,
+                iterations=t_opt,
+                theta=theta,
+                theory_success_prob=theory_prob,
+                measurements=measurements,
+                quantum_queries=t_opt,
+            )
+        else:
+            # 未知 M: BBHT 指数搜索
+            measurements, queries = self._bbht_search(
+                circ, _is_solution, shots, expressions)
+            result = GroverResult(
+                n_qubits=self.n,
+                num_solutions=None,
+                iterations=None,
+                theta=None,
+                theory_success_prob=None,
+                measurements=measurements,
+                quantum_queries=queries,
+            )
+
+        self._search_result = result
+        if self.verbose:
+            self._log_results(result)
+        return result
+
+    def _bbht_search(self, circ: OracleCircuit,
+                     is_solution: Callable[[int], bool],
+                     shots: int,
+                     expressions: List[BooleanExpr],
+                     lam: float = 1.34) -> Tuple[List[Tuple[int, float, bool]], int]:
+        """
+        BBHT 指数搜索 (Boyer-Brassard-Høyer-Tapp), 用于解数量未知的情形。
+
+        每轮从 [0, m) 均匀随机选择迭代次数 t, 执行 t 次 Grover 迭代后测量;
+        若找到解则停止, 否则将 m 乘以因子 lam 继续, 直到 m 超过 √N。
+        期望 Oracle 查询次数为 O(√(N/M)), 无需预先知道 M。
+
+        返回:
+            (measurements, total_oracle_queries)
+        """
+        sqrt_N = math.sqrt(self.N)
+        m = 1.0
+        total_queries = 0
+
+        while m <= sqrt_N * lam:
+            t = random.randint(0, max(0, int(m)))
+            state = self._run_grover_iterations(t, circ)
+            total_queries += t
+
+            result_int, prob = state.measure()
+            result_int &= (self.N - 1)  # 屏蔽 ancilla 位 (ancilla 已逆计算为 |0>)
+
+            if is_solution(result_int):
+                # 找到解: 在同一放大后的态上完成剩余 shots
+                measurements = [(result_int, prob, True)]
+                if shots > 1:
+                    measurements.extend(
+                        self._measure_state(state, shots - 1, is_solution))
+                return measurements, total_queries
+
+            m = min(m * lam, sqrt_N * lam + 1.0)
+
+        raise NoSolutionError(
+            premises=[e.to_string() for e in expressions],
+            n_qubits=self.n,
+        )
+
+    def _measure_state(self, state: QuantumState, shots: int,
+                       is_solution: Callable[[int], bool]
+                       ) -> List[Tuple[int, float, bool]]:
+        """对量子态测量 shots 次, 屏蔽 ancilla 位并验证解。"""
+        measurements = []
+        for _ in range(shots):
+            result_int, prob = state.measure()
+            result_int &= (self.N - 1)
+            measurements.append((result_int, prob, is_solution(result_int)))
+        return measurements
+
+    # ----------------------------------------------------------------
     # 搜索执行
     # ----------------------------------------------------------------
 
@@ -145,11 +324,19 @@ class GroverSearch:
                num_solutions: Optional[int] = None,
                shots: int = 1) -> 'GroverResult':
         """
-        执行 Grover 搜索。
+        执行 Grover 搜索 (黑盒 Oracle 路径)。
+
+        注意: 任意 Python 可调用对象无法编译为量子电路 (即使真实量子
+        计算机也必须先将其表达为布尔电路), 因此本路径在模拟器中通过
+        一次性的 O(N) 标记集构建来模拟 Oracle —— 这是经典模拟的固有
+        开销, 而非算法的查询复杂度 (Grover 迭代仍为 O(√(N/M)) 次
+        Oracle 查询)。若条件可表达为布尔表达式, 请使用
+        search_expressions(), 它直接从 AST 编译 Oracle 电路,
+        不做任何经典枚举。
 
         参数:
             condition: Oracle 函数 f(x) -> bool, True 表示 x 是解
-            num_solutions: 已知解的数量 (None 则自动统计, O(N) 开销)
+            num_solutions: 已知解的数量 (None 则自动统计, O(N) 模拟开销)
             shots: 测量次数
 
         返回:
@@ -209,6 +396,7 @@ class GroverSearch:
             theta=theta,
             theory_success_prob=theory_prob,
             measurements=results,
+            quantum_queries=t_opt,
         )
 
         self._search_result = result
@@ -278,6 +466,7 @@ class GroverSearch:
             theta=theta,
             theory_success_prob=theory_prob,
             measurements=results,
+            quantum_queries=t_opt,
         )
 
         self._search_result = result
@@ -331,26 +520,29 @@ class GroverResult:
 
     属性:
         n_qubits: 量子比特数
-        num_solutions: 解的数量 M
-        iterations: 实际执行的 Grover 迭代次数
-        theta: 理论角度 (弧度)
-        theory_success_prob: 理论成功概率
+        num_solutions: 解的数量 M (BBHT 路径下未知, 为 None)
+        iterations: 实际执行的 Grover 迭代次数 (BBHT 路径为 None)
+        theta: 理论角度 (弧度, BBHT 路径为 None)
+        theory_success_prob: 理论成功概率 (BBHT 路径为 None)
         measurements: [(结果整数, 概率, 是否为解), ...]
+        quantum_queries: 实际 Oracle 查询次数 (量子查询复杂度)
     """
 
     def __init__(self,
                  n_qubits: int,
-                 num_solutions: int,
-                 iterations: int,
-                 theta: float,
-                 theory_success_prob: float,
-                 measurements: List[Tuple[int, float, bool]]):
+                 num_solutions: Optional[int],
+                 iterations: Optional[int],
+                 theta: Optional[float],
+                 theory_success_prob: Optional[float],
+                 measurements: List[Tuple[int, float, bool]],
+                 quantum_queries: Optional[int] = None):
         self.n_qubits = n_qubits
         self.num_solutions = num_solutions
         self.iterations = iterations
         self.theta = theta
         self.theory_success_prob = theory_success_prob
         self.measurements = measurements
+        self.quantum_queries = quantum_queries
 
     @property
     def success_count(self) -> int:
@@ -407,10 +599,12 @@ class GroverResult:
     def summary(self) -> str:
         """生成单行结果摘要。"""
         solutions = self.get_solutions()
+        theory = (f"{self.theory_success_prob:.4%}"
+                  if self.theory_success_prob is not None else "N/A")
         return (
             f"GroverResult(n={self.n_qubits}, M={self.num_solutions}, "
             f"iter={self.iterations}, "
-            f"theory_P={self.theory_success_prob:.4%}, "
+            f"theory_P={theory}, "
             f"empirical_P={self.empirical_success_rate:.4%}, "
             f"found={solutions})"
         )
@@ -430,6 +624,12 @@ def solve_sat(cnf_clauses: list[list[int]],
     """
     Solve a SAT problem in CNF form using Grover's search.
 
+    The CNF formula is compiled directly into a quantum phase-oracle
+    circuit (X/CNOT/Toffoli/Z gates over ancilla qubits) — no classical
+    enumeration of the 2^n assignments is performed. Since the number
+    of solutions M is unknown, BBHT exponential search is used, giving
+    an expected O(√(N/M)) oracle query complexity.
+
     Each clause is a list of literals where positive integers
     represent variables and negative integers represent negated variables.
 
@@ -446,32 +646,27 @@ def solve_sat(cnf_clauses: list[list[int]],
     Returns:
         GroverResult containing the search results
     """
-    N = 1 << n_qubits
+    if not cnf_clauses:
+        raise ValueError("cnf_clauses 不能为空")
 
-    def _eval_literal(assignment: int, literal: int) -> bool:
-        """Evaluate a single literal against a bit assignment."""
-        var_idx = abs(literal) - 1
-        if var_idx >= n_qubits:
-            raise ValueError(f"CNF 变量索引 {literal} 超出 n_qubits={n_qubits}")
-        bit_val = bool((assignment >> var_idx) & 1)
-        return bit_val if literal > 0 else not bit_val
-
-    def _eval_clause(assignment: int, clause: list[int]) -> bool:
-        """Evaluate one clause: OR of its literals."""
-        return any(_eval_literal(assignment, lit) for lit in clause)
-
-    def oracle(assignment: int) -> bool:
-        """SAT oracle: AND of all clauses."""
-        return all(_eval_clause(assignment, clause) for clause in cnf_clauses)
-
-    # Count solutions O(N)
-    M = sum(1 for x in range(N) if oracle(x))
-
-    if M == 0:
-        raise NoSolutionError(
-            premises=[f"CNF: {cnf_clauses}"],
-            n_qubits=n_qubits
-        )
+    # CNF -> BooleanExpr AST: 每个子句是文字的 OR, 整体是子句的 AND
+    expressions: List[BooleanExpr] = []
+    for clause in cnf_clauses:
+        if not clause:
+            raise ValueError("CNF 中存在空子句 (永假)")
+        clause_expr: Optional[BooleanExpr] = None
+        for literal in clause:
+            var_idx = abs(literal) - 1
+            if var_idx >= n_qubits:
+                raise ValueError(
+                    f"CNF 变量索引 {literal} 超出 n_qubits={n_qubits}")
+            lit_expr: BooleanExpr = VarExpr(var_idx)
+            if literal < 0:
+                lit_expr = NotExpr(lit_expr)
+            clause_expr = (lit_expr if clause_expr is None
+                           else OrExpr(clause_expr, lit_expr))
+        expressions.append(clause_expr)
 
     search = GroverSearch(n_qubits, verbose=verbose)
-    return search.search(condition=oracle, num_solutions=M, shots=shots)
+    return search.search_expressions(
+        expressions=expressions, num_solutions=None, shots=shots)

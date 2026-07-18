@@ -34,7 +34,7 @@ class MoleculeResult:
 
 class DrugDiscoveryPipeline:
     """
-    Quantum drug discovery pipeline (demonstration).
+    Quantum drug discovery pipeline.
 
     Workflow:
     1. Input target protein sequence
@@ -42,25 +42,31 @@ class DrugDiscoveryPipeline:
     3. VQE computes approximate binding energy for each
     4. Rank by binding affinity (Top-K)
 
-    IMPORTANT: The molecular Hamiltonians used here are randomly
-    generated from SMILES hashes and do NOT correspond to real
-    electronic structure calculations. Real drug discovery requires
-    quantum chemistry libraries like OpenFermion/PySCF to compute
-    one- and two-electron integrals.
+    Hamiltonian sources (use_real_chemistry):
+        - use_real_chemistry=True: 通过 OpenFermion + PySCF (+ RDKit)
+          从 SMILES 生成 3D 构象并计算真实的一/二电子积分,
+          经 Jordan-Wigner 变换得到 Pauli 哈密顿量。
+          需要: pip install openfermion openfermionpyscf pyscf rdkit
+        - use_real_chemistry=False (默认): 演示模式, 使用从 SMILES
+          哈希生成的随机哈密顿量 (与真实电子结构无关, 仅用于
+          管线演示, 所有结果都会明确标注为演示值)。
 
     Args:
         target_protein: Target protein sequence/identifier
         num_candidates: Number of candidate molecules to screen
         top_k: Number of top molecules to return
+        use_real_chemistry: 是否使用真实量子化学计算
     """
 
     def __init__(self,
                  target_protein: str = "",
                  num_candidates: int = 10,
-                 top_k: int = 5):
+                 top_k: int = 5,
+                 use_real_chemistry: bool = False):
         self.target = target_protein
         self.num_candidates = num_candidates
         self.top_k = top_k
+        self.use_real_chemistry = use_real_chemistry
         self._results: List[MoleculeResult] = []
 
     def _generate_candidates(self) -> List[str]:
@@ -83,31 +89,95 @@ class DrugDiscoveryPipeline:
         """
         Compute an approximate binding energy using VQE.
 
-        NOTE: The Hamiltonian is randomly generated from SMILES hash
-        and does NOT represent real electronic structure. This is for
-        pipeline demonstration only.
+        use_real_chemistry=True 时使用 OpenFermion+PySCF 计算的真实
+        分子哈密顿量; 否则使用演示哈密顿量 (与真实电子结构无关)。
+        VQE 失败时抛出异常, 不再静默返回随机数。
         """
-        try:
-            from ..algorithms.vqe import VQE
+        from ..algorithms.vqe import VQE
 
+        if self.use_real_chemistry:
+            hamiltonian, n_qubits = self._build_molecular_hamiltonian(
+                molecule_smiles)
+        else:
             hamiltonian = self._build_demo_hamiltonian(molecule_smiles)
+            n_qubits = 4
 
-            vqe = VQE(
-                n_qubits=4,
-                hamiltonian_pauli_terms=hamiltonian,
-                ansatz_type="he",
-                n_layers=2,
-            )
+        vqe = VQE(
+            n_qubits=n_qubits,
+            hamiltonian_pauli_terms=hamiltonian,
+            ansatz_type="he",
+            n_layers=2,
+        )
 
-            energy, _ = vqe.optimize(maxiter=100, verbose=False)
+        energy, _ = vqe.optimize(maxiter=100, verbose=False)
 
-            binding_energy = energy + 1.0  # shift for demonstration
-            confidence = min(0.95, 1.0 / abs(binding_energy + 0.5))
-            return binding_energy, confidence
+        binding_energy = energy + 1.0  # shift for demonstration
+        confidence = min(0.95, 1.0 / abs(binding_energy + 0.5))
+        return binding_energy, confidence
 
-        except Exception:
-            energy = np.random.normal(-1.5, 0.3)
-            return energy, 0.7
+    def _build_molecular_hamiltonian(self, smiles: str) -> Tuple[List[Tuple[float, str]], int]:
+        """
+        使用 OpenFermion + PySCF + RDKit 计算真实分子哈密顿量。
+
+        流程: SMILES -> RDKit 3D 构象 -> PySCF 一/二电子积分
+        -> Jordan-Wigner 变换 -> Pauli 字符串列表。
+
+        返回:
+            (hamiltonian_terms, n_qubits)
+
+        失败模式:
+            - 缺少依赖 (openfermion/pyscf/rdkit): 抛出
+              DependencyNotInstalledError 并附安装说明
+        """
+        from ..utils.exceptions import DependencyNotInstalledError
+
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+        except ImportError as e:
+            raise DependencyNotInstalledError(
+                "rdkit",
+                "pip install rdkit openfermion openfermionpyscf pyscf"
+            ) from e
+        try:
+            from openfermion import MolecularData, jordan_wigner
+            from openfermionpyscf import run_pyscf
+        except ImportError as e:
+            raise DependencyNotInstalledError(
+                "openfermion/openfermionpyscf",
+                "pip install openfermion openfermionpyscf pyscf"
+            ) from e
+
+        # SMILES -> 3D 坐标
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"无法解析 SMILES: {smiles}")
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, randomSeed=42)
+        AllChem.MMFFOptimizeMolecule(mol)
+
+        atoms = []
+        conf = mol.GetConformer()
+        for i, atom in enumerate(mol.GetAtoms()):
+            pos = conf.GetAtomPosition(i)
+            atoms.append((atom.GetSymbol(), (pos.x, pos.y, pos.z)))
+
+        # PySCF 计算电子积分 (STO-3G 基组)
+        geometry = atoms
+        molecule = MolecularData(geometry, basis="sto-3g", multiplicity=1)
+        molecule = run_pyscf(molecule, run_scf=True, run_fci=False)
+
+        # Jordan-Wigner -> Pauli 字符串
+        jw_hamiltonian = jordan_wigner(molecule.get_molecular_hamiltonian())
+        terms = []
+        for pauli_str, coeff in jw_hamiltonian.terms.items():
+            # openfermion 的 pauli_str 是 ((qubit, 'X'), ...) 形式
+            pauli = ["I"] * molecule.n_qubits
+            for qubit_idx, pauli_op in pauli_str:
+                pauli[qubit_idx] = pauli_op
+            terms.append((float(np.real(coeff)), "".join(pauli)))
+
+        return terms, molecule.n_qubits
 
     def _build_demo_hamiltonian(self, smiles: str) -> List[Tuple[float, str]]:
         """
@@ -141,9 +211,12 @@ class DrugDiscoveryPipeline:
             List of MoleculeResult, ranked by binding energy
         """
         if verbose:
-            print(f"\n  Drug Discovery Pipeline (DEMONSTRATION)")
+            mode = ("REAL CHEMISTRY (OpenFermion+PySCF)"
+                    if self.use_real_chemistry else "DEMONSTRATION")
+            print(f"\n  Drug Discovery Pipeline ({mode})")
             print(f"  Target: {self.target or 'Default protein'}")
-            print(f"  WARNING: Using demo Hamiltonians - not real electronic structure")
+            if not self.use_real_chemistry:
+                print(f"  WARNING: Using demo Hamiltonians - not real electronic structure")
             print(f"  Screening {self.num_candidates} candidates...\n")
 
         candidates = self._generate_candidates()

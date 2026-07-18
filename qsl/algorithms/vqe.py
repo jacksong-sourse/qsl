@@ -80,40 +80,41 @@ class VQE:
                     )
 
     def _apply_pauli_string(self, state: np.ndarray, pauli_string: str) -> np.ndarray:
-        """Apply a Pauli string operator to a state vector in place."""
+        """Apply a Pauli string operator to a state vector (fully vectorized)."""
+        indices = np.arange(self.N, dtype=np.int64)
         for qubit, pauli in enumerate(pauli_string):
             mask = 1 << qubit
 
             if pauli == 'I':
                 continue
             elif pauli == 'X':
-                for k in range(self.N):
-                    if (k & mask) == 0:
-                        j = k | mask
-                        state[k], state[j] = state[j], state[k]
+                bit_zero = (indices & mask) == 0
+                bit_one = ~bit_zero
+                a0 = state[bit_zero].copy()
+                a1 = state[bit_one].copy()
+                state[bit_zero] = a1
+                state[bit_one] = a0
             elif pauli == 'Y':
-                for k in range(self.N):
-                    if (k & mask) == 0:
-                        j = k | mask
-                        r_k = state[k]
-                        r_j = state[j]
-                        state[k] = -1j * r_j
-                        state[j] = 1j * r_k
+                bit_zero = (indices & mask) == 0
+                bit_one = ~bit_zero
+                a0 = state[bit_zero].copy()
+                a1 = state[bit_one].copy()
+                state[bit_zero] = -1j * a1
+                state[bit_one] = 1j * a0
             elif pauli == 'Z':
-                for k in range(self.N):
-                    if k & mask:
-                        state[k] = -state[k]
+                bit_one = (indices & mask) != 0
+                state[bit_one] *= -1
 
         return state
 
     def _expectation_pauli(self, state: np.ndarray, pauli_string: str) -> float:
-        """Compute ⟨psi|P|psi⟩ for a Pauli string P."""
+        """Compute ⟨psi|P|psi⟩ for a Pauli string P (vectorized)."""
         p_psi = self._apply_pauli_string(state.copy(), pauli_string)
         expectation = np.dot(state.conjugate(), p_psi).real
         return float(expectation)
 
     def _energy(self, state: np.ndarray) -> float:
-        """Compute ⟨psi|H|psi⟩ = sum_t coeff_t * ⟨psi|P_t|psi⟩."""
+        """Compute ⟨psi|H|psi⟩ = sum_t coeff_t * ⟨psi|P_t|psi⟩ (vectorized)."""
         total = 0.0
         for coeff, pauli in self.hamiltonian_terms:
             total += coeff * self._expectation_pauli(state, pauli)
@@ -121,49 +122,49 @@ class VQE:
 
     @staticmethod
     def _apply_ry(state: np.ndarray, qubit: int, theta: float) -> np.ndarray:
-        """Apply RY(theta) rotation to a single qubit (in place)."""
+        """Apply RY(theta) rotation to a single qubit (fully vectorized)."""
         mask = 1 << qubit
         c = np.cos(theta / 2)
         s = np.sin(theta / 2)
-        N = len(state)
+        indices = np.arange(len(state), dtype=np.int64)
 
-        for k in range(N):
-            if (k & mask) == 0:
-                j = k | mask
-                a_k = state[k]
-                a_j = state[j]
-                state[k] = c * a_k - s * a_j
-                state[j] = s * a_k + c * a_j
+        bit_zero = (indices & mask) == 0
+        bit_one = ~bit_zero
+        a0 = state[bit_zero].copy()
+        a1 = state[bit_one].copy()
+        state[bit_zero] = c * a0 - s * a1
+        state[bit_one] = s * a0 + c * a1
 
         return state
 
     @staticmethod
     def _apply_rz(state: np.ndarray, qubit: int, phi: float) -> np.ndarray:
-        """Apply RZ(phi) rotation to a single qubit (in place)."""
+        """Apply RZ(phi) rotation to a single qubit (fully vectorized)."""
         mask = 1 << qubit
         phase0 = np.exp(-1j * phi / 2)
         phase1 = np.exp(1j * phi / 2)
-        N = len(state)
+        indices = np.arange(len(state), dtype=np.int64)
 
-        for k in range(N):
-            if k & mask:
-                state[k] *= phase1
-            else:
-                state[k] *= phase0
+        bit_zero = (indices & mask) == 0
+        bit_one = ~bit_zero
+        state[bit_zero] *= phase0
+        state[bit_one] *= phase1
 
         return state
 
     @staticmethod
     def _apply_cnot(state: np.ndarray, control: int, target: int) -> np.ndarray:
-        """Apply CNOT gate (in place)."""
+        """Apply CNOT gate (fully vectorized)."""
         c_mask = 1 << control
         t_mask = 1 << target
-        N = len(state)
+        indices = np.arange(len(state), dtype=np.int64)
 
-        for k in range(N):
-            if (k & c_mask) and not (k & t_mask):
-                j = k ^ t_mask
-                state[k], state[j] = state[j], state[k]
+        c_one_t_zero = ((indices & c_mask) != 0) & ((indices & t_mask) == 0)
+        c_one_t_one = ((indices & c_mask) != 0) & ((indices & t_mask) != 0)
+        a_t0 = state[c_one_t_zero].copy()
+        a_t1 = state[c_one_t_one].copy()
+        state[c_one_t_zero] = a_t1
+        state[c_one_t_one] = a_t0
 
         return state
 
@@ -291,17 +292,17 @@ class VQE:
 
     @staticmethod
     def _apply_h(state: np.ndarray, qubit: int) -> np.ndarray:
-        """Apply Hadamard gate to a single qubit (in place)."""
+        """Apply Hadamard gate to a single qubit (fully vectorized)."""
         mask = 1 << qubit
         inv_sqrt2 = 1.0 / np.sqrt(2)
-        N = len(state)
-        for k in range(N):
-            if (k & mask) == 0:
-                j = k | mask
-                a_k = state[k]
-                a_j = state[j]
-                state[k] = (a_k + a_j) * inv_sqrt2
-                state[j] = (a_k - a_j) * inv_sqrt2
+        indices = np.arange(len(state), dtype=np.int64)
+
+        bit_zero = (indices & mask) == 0
+        bit_one = ~bit_zero
+        a0 = state[bit_zero].copy()
+        a1 = state[bit_one].copy()
+        state[bit_zero] = (a0 + a1) * inv_sqrt2
+        state[bit_one] = (a0 - a1) * inv_sqrt2
         return state
 
     def _uccsd_ansatz(self, params: np.ndarray) -> np.ndarray:
@@ -366,23 +367,38 @@ class VQE:
         state = self._ansatz(params)
         return self._energy(state)
 
+    def _parameter_shift_gradient(self, params: np.ndarray) -> np.ndarray:
+        """
+        使用 parameter-shift rule 计算精确梯度。
+
+        所有 ansatz 门均为 Pauli 旋转门 exp(-i*theta/2*G) (G^2 = I),
+        其期望值对 theta 的偏导有闭式表达:
+
+            dE/dtheta_i = [E(theta_i + pi/2) - E(theta_i - pi/2)] / 2
+
+        这是精确梯度 (非有限差分近似), 每个参数只需 2 次前向求值,
+        且不存在步长 eps 带来的截断误差。
+        """
+        grad = np.empty_like(params)
+        for i in range(len(params)):
+            orig = params[i]
+            params[i] = orig + np.pi / 2
+            e_plus = self._cost_function(params)
+            params[i] = orig - np.pi / 2
+            e_minus = self._cost_function(params)
+            params[i] = orig
+            grad[i] = (e_plus - e_minus) / 2.0
+        return grad
+
     def _gradient_descent(self, initial_params: np.ndarray,
                           maxiter: int, verbose: bool) -> np.ndarray:
-        """Simple finite-difference gradient descent."""
+        """基于 parameter-shift 精确梯度的梯度下降。"""
         params = initial_params.astype(np.float64, copy=True)
-        lr = 0.05
-        eps = 1e-6
+        lr = 0.1
 
         for iteration in range(maxiter):
             e0 = self._cost_function(params)
-
-            grad = np.empty_like(params)
-            for i in range(len(params)):
-                orig = params[i]
-                params[i] = orig + eps
-                e_plus = self._cost_function(params)
-                params[i] = orig
-                grad[i] = (e_plus - e0) / eps
+            grad = self._parameter_shift_gradient(params)
 
             params -= lr * grad
             lr *= 0.995

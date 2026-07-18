@@ -158,24 +158,20 @@ class QSLCompiler:
             )
 
     def _run_grover(self, program: QSLProgram, backend: Optional[str] = None, **run_options):
-        """执行 Grover 搜索。"""
+        """执行 Grover 搜索。
+
+        布尔前提直接传递给后端编译为量子 Oracle 电路, 不在经典侧
+        枚举 2^n 个基态。解数量未知, 由后端使用 BBHT 指数搜索
+        (期望查询复杂度 O(√(N/M))); 若无解, 后端抛出 NoSolutionError。
+        """
         backend_name = backend or self._backend_name
         backend_instance = self._get_backend(backend_name)
 
         parsed_premises = self._parse_premises(program)
         oracle = build_oracle_function(parsed_premises)
 
-        N = 1 << program.n_qubits
-        M = sum(1 for x in range(N) if oracle(x))
-
-        if M == 0:
-            raise NoSolutionError(
-                premises=program.premises,
-                n_qubits=program.n_qubits
-            )
-
         if self.verbose:
-            self._print_compilation_info(program, parsed_premises, M)
+            self._print_compilation_info(program, parsed_premises, None)
 
         gate_sequence = []
         for premise in program.premises:
@@ -194,13 +190,15 @@ class QSLCompiler:
 
         shots = program.shots
         options = {**self._backend_options, **run_options}
+        options.pop("oracle_expressions", None)
 
         result = backend_instance.run_grover_search(
             n_qubits=program.n_qubits,
             oracle=oracle,
-            num_solutions=M,
+            num_solutions=None,
             shots=shots,
             verbose=self.verbose,
+            oracle_expressions=parsed_premises,
             **options,
         )
 
@@ -282,7 +280,12 @@ class QSLCompiler:
         if molecule.lower() == "h2":
             hamiltonian = VQE.h2_hamiltonian()
         else:
-            hamiltonian = VQE.h2_hamiltonian()
+            raise ProgramValidationError(
+                "premises", molecule,
+                f"暂不支持分子 '{molecule}'。当前仅内置 H₂ 的 STO-3G "
+                f"Pauli 哈密顿量; 其他分子请直接构造 "
+                f"hamiltonian_pauli_terms 并使用 qsl.algorithms.VQE。"
+            )
 
         vqe = VQE(n_qubits=min(n_qubits, 4), hamiltonian_pauli_terms=hamiltonian)
         result = vqe.optimize()
@@ -395,7 +398,7 @@ class QSLCompiler:
         return parsed
 
     def _print_compilation_info(self, program: QSLProgram,
-                                 parsed: List[BooleanExpr], M: int):
+                                 parsed: List[BooleanExpr], M):
         """打印编译信息。"""
         N = 1 << program.n_qubits
         print(f"\n{'#'*60}")
@@ -406,7 +409,10 @@ class QSLCompiler:
         print(f"  前提:")
         for p, expr in zip(program.premises, parsed):
             print(f"    {p}  ->  {expr.to_string()}")
-        print(f"  满足前提:   {M}/{N} ({M/N*100:.2f}%)")
+        if M is not None:
+            print(f"  满足前提:   {M}/{N} ({M/N*100:.2f}%)")
+        else:
+            print(f"  解数量:     未知 (BBHT 指数搜索, 无经典枚举)")
         print()
 
 

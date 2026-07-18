@@ -235,11 +235,11 @@ def mcx(n_controls):
 # Kronecker 积与受控门
 # ====================================================================
 
-def kron(*matrices):
+def kronecker_prod(*matrices):
     """
     计算多个矩阵的 Kronecker 积。
 
-    kron(A, B, C) = A ⊗ B ⊗ C
+    kronecker_prod(A, B, C) = A ⊗ B ⊗ C
 
     使用 functools.reduce 和 np.kron 从左到右累积计算。
     Kronecker 积用于组合作用于不同量子比特的门，
@@ -252,11 +252,27 @@ def kron(*matrices):
         numpy ndarray，形状为各矩阵维度的乘积
 
     示例:
-        kron(H, I) -> H ⊗ I  (4x4 矩阵，H 作用于第 0 量子比特)
+        kronecker_prod(H, I) -> H ⊗ I  (4x4 矩阵，H 作用于第 0 量子比特)
     """
     if not matrices:
         return np.array([[1]], dtype=complex)
     return reduce(np.kron, matrices)
+
+
+def kron(*matrices):
+    """
+    kronecker_prod 的向后兼容别名 (已弃用)。
+
+    该名称遮蔽了 numpy.kron, 新代码请使用 kronecker_prod
+    或直接调用 np.kron。
+    """
+    import warnings
+    warnings.warn(
+        "qsl.quantum_gates.kron 已弃用 (与 numpy.kron 命名冲突), "
+        "请改用 kronecker_prod 或 np.kron。",
+        DeprecationWarning, stacklevel=2,
+    )
+    return kronecker_prod(*matrices)
 
 
 def controlled_gate(gate, n_controls):
@@ -322,5 +338,5 @@ __all__ = [
     # 多量子比特门
     "swap", "cswap", "mcx",
     # 工具函数
-    "kron", "controlled_gate",
+    "kronecker_prod", "kron", "controlled_gate",
 ]

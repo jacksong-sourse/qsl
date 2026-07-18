@@ -70,7 +70,7 @@ class SimulatorBackend(AbstractBackend):
     def run_grover_search(self,
                            n_qubits: int,
                            oracle: Callable[[int], bool],
-                           num_solutions: int,
+                           num_solutions: Optional[int],
                            shots: int,
                            verbose: bool = False,
                            **run_options) -> GroverResult:
@@ -79,11 +79,15 @@ class SimulatorBackend(AbstractBackend):
 
         参数:
             n_qubits: 量子比特数
-            oracle: Boolean oracle 函数
-            num_solutions: 已知解的数量
+            oracle: Boolean oracle 函数 (黑盒路径, 用于结果验证)
+            num_solutions: 已知解的数量 (None 则 BBHT 指数搜索)
             shots: 测量次数
             verbose: 是否输出详细过程
-            **run_options: 额外选项
+            **run_options:
+                - oracle_expressions: BooleanExpr 列表。提供时 Oracle 直接
+                  从布尔表达式 AST 编译为量子电路 (X/CNOT/Toffoli/Z),
+                  不做任何 O(2^n) 经典枚举; 未提供时退回黑盒 callable 路径
+                  (模拟器需一次性 O(N) 构建标记集, 属模拟固有开销)。
 
         返回:
             GroverResult
@@ -95,8 +99,20 @@ class SimulatorBackend(AbstractBackend):
         # 验证请求
         self.validate_request(n_qubits, shots)
 
+        oracle_expressions = run_options.get("oracle_expressions")
+
         # 创建 GroverSearch 实例并执行
         search = GroverSearch(n_qubits, verbose=verbose)
+
+        if oracle_expressions:
+            # 量子电路 Oracle 路径: 无经典枚举
+            return search.search_expressions(
+                expressions=oracle_expressions,
+                num_solutions=num_solutions,
+                shots=shots,
+            )
+
+        # 黑盒 callable 路径
         result = search.search(
             condition=oracle,
             num_solutions=num_solutions,

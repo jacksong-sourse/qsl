@@ -9,12 +9,17 @@ class QuantumLayer(nn.Module):
     Quantum layer as a PyTorch nn.Module.
 
     Supports three encoding types:
-        - "angle": Encode each feature as RY(arctan(x_i)) rotation
+        - "angle": Encode each feature as RY(pi * sigmoid(x_i)) rotation
         - "amplitude": Encode feature vector as amplitudes (requires normalization)
         - "dense_angle": Encode features through dense + angle rotation
 
     The layer outputs expectation values of PauliZ on each qubit.
-    Gradient is computed via parameter-shift rule.
+
+    All gate operations are implemented as batched tensor operations
+    (reshape / stack / gather / broadcast) over the full state vector —
+    there are NO Python loops over the 2^n basis states, and every
+    operation is differentiable (no in-place modification of tensors
+    that participate in the autograd graph).
 
     Args:
         n_qubits: Number of qubits
@@ -37,6 +42,26 @@ class QuantumLayer(nn.Module):
         self.n_layers = n_layers
         self.N = 1 << n_qubits
 
+        # ---- 预计算的索引/符号缓冲 (全部向量化使用) ----
+        indices = torch.arange(self.N)
+        # PauliZ 符号矩阵: signs[q, k] = +1 (bit q 为 0) / -1 (bit q 为 1)
+        signs = torch.ones(n_qubits, self.N)
+        for q in range(n_qubits):
+            signs[q, (indices & (1 << q)) != 0] = -1.0
+        self.register_buffer("_z_signs", signs)
+
+        # CNOT 链 (0->1, 1->2, ..., n-2->n-1) 的基态置换 (单次 gather)。
+        # 第 k 个 CNOT 将基态 j 映射到 σ_k(j); 链的总效果为
+        # final[j] = initial[σ_0(σ_1(...σ_last(j)))], 需按序复合。
+        perm = torch.arange(self.N)
+        for q in range(n_qubits - 1):
+            c_mask = 1 << q
+            t_mask = 1 << (q + 1)
+            sigma = torch.where((indices & c_mask) != 0,
+                                indices ^ t_mask, indices)
+            perm = perm[sigma]
+        self.register_buffer("_cnot_perm", perm)
+
         # Trainable parameters: [n_layers, n_qubits, 2] for RY+RZ per qubit per layer
         if encoding == "dense_angle":
             # Dense layer weights for encoding
@@ -48,166 +73,135 @@ class QuantumLayer(nn.Module):
         n_params = n_layers * n_qubits * 2
         self.trainable_params = nn.Parameter(torch.randn(n_params) * 0.1)
 
+    # ----------------------------------------------------------------
+    # 向量化单量子比特门 (作用于 reshape 后的 (batch, 2, ..., 2) 态)
+    # ----------------------------------------------------------------
+
+    @staticmethod
+    def _apply_ry_batched(state: torch.Tensor, q: int, n_qubits: int,
+                          cos_half: torch.Tensor,
+                          sin_half: torch.Tensor) -> torch.Tensor:
+        """
+        对第 q 个量子比特施加 RY 旋转 (批量, 可微)。
+
+        state: (..., 2, 2, ..., 2) 复数张量 (最后 n_qubits 个轴为量子比特轴,
+        其中量子比特 q 对应轴 -(q+1), 即量子比特 0 是最后一个轴/LSB)
+        cos_half/sin_half: 标量或 (...) 形状张量 (逐样本角度)
+        """
+        # 将第 q 个量子比特轴移到最后
+        state = torch.movedim(state, -(q + 1), -1)
+        a0 = state[..., 0]
+        a1 = state[..., 1]
+        # 广播角度: cos/sin 形状为 (...) 或标量
+        new0 = cos_half * a0 - sin_half * a1
+        new1 = sin_half * a0 + cos_half * a1
+        state = torch.stack([new0, new1], dim=-1)
+        return torch.movedim(state, -1, -(q + 1))
+
+    @staticmethod
+    def _apply_rz_batched(state: torch.Tensor, q: int, n_qubits: int,
+                          phi: torch.Tensor) -> torch.Tensor:
+        """对第 q 个量子比特施加 RZ 旋转 (批量, 可微)。"""
+        phase0 = torch.exp(-0.5j * phi)
+        phase1 = torch.exp(0.5j * phi)
+        state = torch.movedim(state, -(q + 1), -1)
+        state = torch.stack([state[..., 0] * phase0,
+                             state[..., 1] * phase1], dim=-1)
+        return torch.movedim(state, -1, -(q + 1))
+
+    # ----------------------------------------------------------------
+    # 编码
+    # ----------------------------------------------------------------
+
     def _encode_state(self, x: torch.Tensor) -> torch.Tensor:
         """
         Encode classical data into a quantum state vector.
         Returns state vector as complex tensor of shape (..., N).
         """
         batch_shape = x.shape[:-1]
-        batch_size = int(torch.prod(torch.tensor(batch_shape))) if batch_shape else 1
+        batch_size = int(np.prod(batch_shape)) if batch_shape else 1
         x = x.reshape(batch_size, -1)
 
-        if self.encoding == "angle":
-            # Initialize |0...0>
-            state_real = torch.zeros(batch_size, self.N, dtype=torch.float32)
-            state_imag = torch.zeros(batch_size, self.N, dtype=torch.float32)
-            state_real[:, 0] = 1.0
-
-            # Apply RY(pi * sigmoid(x_i)) on each qubit
-            # Normalize features to [0, pi] to use full RY range
-            for i in range(min(self.n_qubits, x.shape[1])):
-                # Map to [0, pi] using pi * sigmoid(x)
-                angles = np.pi * torch.sigmoid(x[:, i])
-                cos_half = torch.cos(angles / 2)
-                sin_half = torch.sin(angles / 2)
-
-                # Apply RY rotation: simplified version
-                # RY|0> = cos(θ/2)|0> + sin(θ/2)|1>
-                mask = 1 << i
-                for k in range(self.N):
-                    if (k & mask) == 0:
-                        j = k | mask
-                        old_real_k = state_real[:, k].clone()
-                        old_imag_k = state_imag[:, k].clone()
-                        old_real_j = state_real[:, j].clone()
-                        old_imag_j = state_imag[:, j].clone()
-
-                        # RY rotation
-                        state_real[:, k] = (
-                            cos_half * old_real_k - sin_half * old_real_j
-                        )
-                        state_imag[:, k] = (
-                            cos_half * old_imag_k - sin_half * old_imag_j
-                        )
-                        state_real[:, j] = (
-                            sin_half * old_real_k + cos_half * old_real_j
-                        )
-                        state_imag[:, j] = (
-                            sin_half * old_imag_k + cos_half * old_imag_j
-                        )
-
-            return torch.complex(state_real, state_imag).reshape(
-                *batch_shape, self.N
-            )
-
-        elif self.encoding == "amplitude":
+        if self.encoding == "amplitude":
             # Encode normalized feature vector as amplitudes
             norm = torch.norm(x, dim=1, keepdim=True)
             x_norm = x / (norm + 1e-10)
 
             # Pad to power of 2
-            padded = torch.zeros(batch_size, self.N)
-            padded[:, : min(self.N, x_norm.shape[1])] = x_norm[
-                :, : min(self.N, x_norm.shape[1])
-            ]
+            padded = torch.zeros(batch_size, self.N, dtype=x.dtype,
+                                 device=x.device)
+            width = min(self.N, x_norm.shape[1])
+            padded = torch.cat([x_norm[:, :width],
+                                padded[:, width:]], dim=1)
             padded = padded / torch.norm(padded, dim=1, keepdim=True)
 
-            return torch.complex(padded, torch.zeros_like(padded)).reshape(
-                *batch_shape, self.N
-            )
+            return padded.to(torch.complex64).reshape(*batch_shape, self.N)
 
-        elif self.encoding == "dense_angle":
+        if self.encoding == "dense_angle":
             # Dense layer first, then angle encoding with atan
-            x = self.dense(x)
-            x = torch.atan(x)  # Apply atan for bounded mapping, consistent with angle path
-            return self._encode_state_angle(x, batch_shape)
-
+            angles = torch.atan(self.dense(x))
+        elif self.encoding == "angle":
+            # Map features to [0, pi] using pi * sigmoid(x)
+            width = min(self.n_qubits, x.shape[1])
+            angles = torch.zeros(batch_size, self.n_qubits,
+                                 dtype=x.dtype, device=x.device)
+            angles = torch.cat(
+                [np.pi * torch.sigmoid(x[:, :width]),
+                 angles[:, width:]], dim=1)
         else:
             raise ValueError(f"Unknown encoding: {self.encoding}")
 
-    def _encode_state_angle(
-        self, x: torch.Tensor, batch_shape: tuple
-    ) -> torch.Tensor:
-        """Helper for angle encoding with pre-computed dense output."""
-        state_real = torch.zeros(x.shape[0], self.N, dtype=torch.float32)
-        state_imag = torch.zeros(x.shape[0], self.N, dtype=torch.float32)
-        state_real[:, 0] = 1.0
+        # 角度编码: 从 |0...0> 出发逐量子比特施加 RY (向量化)
+        state = torch.zeros(batch_size, *([2] * self.n_qubits),
+                            dtype=torch.complex64, device=x.device)
+        state[(slice(None),) + (0,) * self.n_qubits] = 1.0
 
-        for i in range(min(self.n_qubits, x.shape[1])):
-            angles = x[:, i]
-            cos_half = torch.cos(angles / 2)
-            sin_half = torch.sin(angles / 2)
+        n_angles = min(self.n_qubits, angles.shape[1])
+        for q in range(n_angles):
+            # 角度广播到 (batch, 1, ..., 1): 与移除一个量子比特轴后的
+            # 态切片 (batch, 2, ..., 2) 对齐 (n_qubits - 1 个单例轴)
+            theta = angles[:, q].reshape(batch_size,
+                                         *([1] * (self.n_qubits - 1)))
+            cos_half = torch.cos(theta / 2)
+            sin_half = torch.sin(theta / 2)
+            state = self._apply_ry_batched(
+                state, q, self.n_qubits, cos_half, sin_half)
 
-            mask = 1 << i
-            for k in range(self.N):
-                if (k & mask) == 0:
-                    j = k | mask
-                    old_rk = state_real[:, k].clone()
-                    old_ik = state_imag[:, k].clone()
-                    old_rj = state_real[:, j].clone()
-                    old_ij = state_imag[:, j].clone()
-                    state_real[:, k] = cos_half * old_rk - sin_half * old_rj
-                    state_imag[:, k] = cos_half * old_ik - sin_half * old_ij
-                    state_real[:, j] = sin_half * old_rk + cos_half * old_rj
-                    state_imag[:, j] = sin_half * old_ik + cos_half * old_ij
+        return state.reshape(*batch_shape, self.N)
 
-        return torch.complex(state_real, state_imag).reshape(*batch_shape, self.N)
+    # ----------------------------------------------------------------
+    # 变分电路
+    # ----------------------------------------------------------------
 
     def _apply_variational_circuit(self, state: torch.Tensor) -> torch.Tensor:
         """
         Apply variational layers to the quantum state.
-        Uses parameter-shift rule compatible operations.
-        Minimize clone/copy operations for performance.
+
+        Fully batched and differentiable: RY/RZ via stack/broadcast,
+        CNOT chain via a single precomputed gather permutation.
         """
+        batch_shape = state.shape[:-1]
+        batch_size = int(np.prod(batch_shape)) if batch_shape else 1
         params = self.trainable_params.view(self.n_layers, self.n_qubits, 2)
+
+        state = state.reshape(batch_size, *([2] * self.n_qubits))
 
         for layer in range(self.n_layers):
             for q in range(self.n_qubits):
                 theta = params[layer, q, 0]
                 phi = params[layer, q, 1]
+                state = self._apply_ry_batched(
+                    state, q, self.n_qubits,
+                    torch.cos(theta / 2), torch.sin(theta / 2))
+                state = self._apply_rz_batched(
+                    state, q, self.n_qubits, phi)
 
-                # RY(theta) rotation
-                cos_half = torch.cos(theta / 2)
-                sin_half = torch.sin(theta / 2)
+            # Entangling: CNOT 链, 单次 gather 完成 (修正了原实现中
+            # (k & c_mask) and (k & t_mask) == 0 的运算符优先级 bug)
+            state = state.reshape(batch_size, self.N)[..., self._cnot_perm]
+            state = state.reshape(batch_size, *([2] * self.n_qubits))
 
-                mask = 1 << q
-                for k in range(self.N):
-                    if (k & mask) == 0:
-                        j = k | mask
-                        # Use index_select to avoid .clone() where possible
-                        old_k_r = state[..., k].real
-                        old_k_i = state[..., k].imag
-                        old_j_r = state[..., j].real
-                        old_j_i = state[..., j].imag
-                        new_k_r = cos_half * old_k_r - sin_half * old_j_r
-                        new_k_i = cos_half * old_k_i - sin_half * old_j_i
-                        new_j_r = sin_half * old_k_r + cos_half * old_j_r
-                        new_j_i = sin_half * old_k_i + cos_half * old_j_i
-                        state[..., k] = torch.complex(new_k_r, new_k_i)
-                        state[..., j] = torch.complex(new_j_r, new_j_i)
-
-                # RZ(phi) rotation
-                phase0 = torch.exp(-1j * phi / 2)
-                phase1 = torch.exp(1j * phi / 2)
-                for k in range(self.N):
-                    if k & mask:
-                        state[..., k] = state[..., k] * phase1
-                    else:
-                        state[..., k] = state[..., k] * phase0
-
-            # Entangling: CNOT chain
-            for q in range(self.n_qubits - 1):
-                c_mask = 1 << q
-                t_mask = 1 << (q + 1)
-                for k in range(self.N):
-                    if (k & c_mask) and (k & t_mask) == 0:
-                        j = k ^ t_mask
-                        sk = state[..., k].clone()
-                        sj = state[..., j].clone()
-                        state[..., k] = sj
-                        state[..., j] = sk
-
-        return state
+        return state.reshape(*batch_shape, self.N)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -226,33 +220,9 @@ class QuantumLayer(nn.Module):
         # Apply variational circuit
         state = self._apply_variational_circuit(state)
 
-        # Compute PauliZ expectation for each qubit
-        # ⟨Z_i⟩ = sum_j (-1)^(bit_i of j) * |α_j|^2
+        # Compute PauliZ expectation for each qubit (单次矩阵乘):
+        # ⟨Z_q⟩ = sum_k signs[q, k] * |α_k|^2
         probs = torch.abs(state) ** 2
-
-        expectations = torch.zeros(
-            *state.shape[:-1],
-            self.n_qubits,
-            dtype=torch.float32,
-            device=state.device,
-        )
-
-        for q in range(self.n_qubits):
-            mask = 1 << q
-            # Sum probabilities with sign (+1 for |0>, -1 for |1>)
-            z_plus = torch.zeros(
-                *state.shape[:-1], dtype=torch.float32, device=state.device
-            )
-            z_minus = torch.zeros(
-                *state.shape[:-1], dtype=torch.float32, device=state.device
-            )
-
-            for k in range(self.N):
-                if k & mask:
-                    z_minus = z_minus + probs[..., k]
-                else:
-                    z_plus = z_plus + probs[..., k]
-
-            expectations[..., q] = z_plus - z_minus
+        expectations = probs @ self._z_signs.T
 
         return expectations

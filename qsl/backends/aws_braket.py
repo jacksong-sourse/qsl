@@ -241,7 +241,7 @@ class AWSBraketBackend(AbstractBackend):
     def run_grover_search(self,
                            n_qubits: int,
                            oracle: Callable[[int], bool],
-                           num_solutions: int,
+                           num_solutions: Optional[int],
                            shots: int,
                            verbose: bool = False,
                            **run_options) -> GroverResult:
@@ -251,10 +251,25 @@ class AWSBraketBackend(AbstractBackend):
         Builds a Braket circuit and submits it to the AWS Braket
         device (SV1 simulator by default, or a QPU if configured).
         Falls back to local simulator if Braket SDK is not available.
+
+        num_solutions 为 None 时, 委托本地 BBHT 指数搜索
+        (避免在未知解数量时做 O(2^n) 经典枚举)。
         """
         import math
 
         self.validate_request(n_qubits, shots)
+
+        if num_solutions is None:
+            # 解数量未知: 使用本地 BBHT 搜索 (电路 Oracle, 无经典枚举)
+            from ..core.grover import GroverSearch
+            search = GroverSearch(n_qubits, verbose=verbose)
+            oracle_expressions = run_options.get("oracle_expressions")
+            if oracle_expressions:
+                return search.search_expressions(
+                    expressions=oracle_expressions,
+                    num_solutions=None, shots=shots)
+            return search.search(condition=oracle, num_solutions=None,
+                                 shots=shots)
 
         N = 1 << n_qubits
         theta = math.asin(math.sqrt(max(1, num_solutions) / N))

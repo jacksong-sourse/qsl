@@ -17,12 +17,22 @@ class QAOA:
 
     Args:
         n_qubits: Number of qubits (variables)
-        cost_matrix: Symmetric n x n matrix defining the QUBO/Ising problem
-                     Cost = sum_{i<j} cost_matrix[i][j] * Z_i * Z_j + sum_i cost_matrix[i][i] * Z_i
+        cost_matrix: Symmetric n x n matrix defining the problem.
+            - encoding="ising": Cost = sum_i Q[i][i] * s_i
+                                + sum_{i<j} Q[i][j] * s_i * s_j,
+              with s_i in {-1, +1} (Ising spins)
+            - encoding="qubo": Cost = sum_i Q[i][i] * x_i
+                               + sum_{i<j} Q[i][j] * x_i * x_j,
+              with x_i in {0, 1} (binary variables)
         p: Number of QAOA layers (depth)
+        encoding: "ising" (default) or "qubo". QUBO problems are
+            converted to Ising form via x_i = (1 - s_i) / 2 internally,
+            so the cost Hamiltonian, expectation values and reported
+            energies are always consistent.
     """
 
-    def __init__(self, n_qubits: int, cost_matrix: np.ndarray, p: int = 1):
+    def __init__(self, n_qubits: int, cost_matrix: np.ndarray, p: int = 1,
+                 encoding: str = "ising"):
         if cost_matrix.shape != (n_qubits, n_qubits):
             raise ValueError(
                 f"cost_matrix must be {n_qubits}x{n_qubits}, "
@@ -30,33 +40,77 @@ class QAOA:
             )
         if p < 1:
             raise ValueError(f"p must be >= 1, got {p}")
+        if encoding not in ("ising", "qubo"):
+            raise ValueError(
+                f"encoding must be 'ising' or 'qubo', got '{encoding}'"
+            )
         self.n_qubits = n_qubits
         self.cost_matrix = cost_matrix
+        self.encoding = encoding
         self.p = p
         self.N = 1 << n_qubits
         self._optimal_params = None
         self._optimal_value = None
         self._optimal_bitstring = None
 
+        # 统一转换为 Ising 形式: E = offset + sum_i h_i s_i + sum_{i<j} J_ij s_i s_j
+        if encoding == "qubo":
+            self._h, self._J, self._offset = self._qubo_to_ising(cost_matrix)
+        else:
+            self._h = np.diag(cost_matrix).astype(float).copy()
+            self._J = np.array(cost_matrix, dtype=float, copy=True)
+            self._offset = 0.0
+
+    @staticmethod
+    def _qubo_to_ising(Q: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+        """
+        将 QUBO 矩阵转换为 Ising 参数 (h, J, offset)。
+
+        代入 x_i = (1 - s_i)/2 (x in {0,1}, s in {-1,+1}):
+            E_qubo = sum_i Q_ii x_i + sum_{i<j} Q_ij x_i x_j
+                   = offset + sum_i h_i s_i + sum_{i<j} J_ij s_i s_j
+
+        其中:
+            J_ij   = Q_ij / 4
+            h_i    = -Q_ii/2 - sum_{j!=i} Q_ij/4   (Q 对称)
+            offset = sum_i Q_ii/2 + sum_{i<j} Q_ij/4
+        """
+        n = Q.shape[0]
+        J = np.zeros((n, n))
+        h = np.zeros(n)
+        offset = 0.0
+        for i in range(n):
+            h[i] -= Q[i, i] / 2.0
+            offset += Q[i, i] / 2.0
+            for j in range(i + 1, n):
+                J[i, j] = Q[i, j] / 4.0
+                h[i] -= Q[i, j] / 4.0
+                h[j] -= Q[i, j] / 4.0
+                offset += Q[i, j] / 4.0
+        return h, J, offset
+
     def _cost(self, bitstring: int) -> float:
         """
         Compute cost of a classical bitstring.
 
-        Cost = sum_i h_i * s_i + sum_{i<j} J_{ij} * s_i * s_j
+        E = offset + sum_i h_i * s_i + sum_{i<j} J_ij * s_i * s_j
         where s_i = (-1)^(bit_i) in {-1, +1}
+
+        对于 encoding="qubo", 该值与原始 QUBO 目标函数完全一致
+        (变量转换 x_i = (1 - s_i)/2 已包含在 h/J/offset 中)。
         """
-        cost = 0.0
+        cost = self._offset
         for i in range(self.n_qubits):
             si = -1.0 if (bitstring >> i) & 1 else 1.0
-            cost += self.cost_matrix[i, i] * si
+            cost += self._h[i] * si
             for j in range(i + 1, self.n_qubits):
                 sj = -1.0 if (bitstring >> j) & 1 else 1.0
-                cost += self.cost_matrix[i, j] * si * sj
+                cost += self._J[i, j] * si * sj
         return cost
 
     def _apply_cost_layer(self, state: np.ndarray, gamma: float) -> np.ndarray:
         """
-        Apply e^(-i*gamma*H_C) to the state vector.
+        Apply e^(-i*gamma*H_C) to the state vector (fully vectorized).
 
         Uses ZZ interactions for off-diagonal terms and Z rotations for diagonal.
         For each ZZ term J_{ij} * Z_i * Z_j:
@@ -64,55 +118,48 @@ class QAOA:
         For each Z term h_i * Z_i:
             Apply phase = exp(-i*gamma*h_i) if Z_i == +1 else exp(i*gamma*h_i)
         """
+        indices = np.arange(self.N, dtype=np.int64)
+        phases = np.ones(self.N, dtype=complex)
+
         for i in range(self.n_qubits):
             mask_i = 1 << i
-            for j in range(self.n_qubits):
-                if i == j:
-                    # Z_i term
-                    coeff = self.cost_matrix[i, i]
-                    if abs(coeff) < 1e-12:
-                        continue
-                    for k in range(self.N):
-                        if k & mask_i:
-                            state[k] *= np.exp(-1j * gamma * coeff)  # |1> -> Z=-1
-                        else:
-                            state[k] *= np.exp(1j * gamma * coeff)  # |0> -> Z=+1
-                elif j > i:
-                    # ZZ_{ij} term
-                    coeff = self.cost_matrix[i, j]
-                    if abs(coeff) < 1e-12:
-                        continue
-                    mask_j = 1 << j
-                    for k in range(self.N):
-                        zi = -1.0 if (k & mask_i) else 1.0
-                        zj = -1.0 if (k & mask_j) else 1.0
-                        # Z_i * Z_j = +1 if same, -1 if different
-                        zz = zi * zj
-                        state[k] *= np.exp(-1j * gamma * coeff * zz)
+            # Z_i term
+            coeff = self._h[i]
+            if abs(coeff) >= 1e-12:
+                zi = np.where((indices & mask_i) != 0, -1.0, 1.0)
+                phases *= np.exp(-1j * gamma * coeff * zi)
+
+            for j in range(i + 1, self.n_qubits):
+                mask_j = 1 << j
+                coeff = self._J[i, j]
+                if abs(coeff) >= 1e-12:
+                    zj = np.where((indices & mask_j) != 0, -1.0, 1.0)
+                    zi = np.where((indices & mask_i) != 0, -1.0, 1.0)
+                    zz = zi * zj
+                    phases *= np.exp(-1j * gamma * coeff * zz)
+
+        state *= phases
         return state
 
     def _apply_mixer_layer(self, state: np.ndarray, beta: float) -> np.ndarray:
         """
-        Apply mixer Hamiltonian e^(-i*beta*H_M) = prod_i RX_i(2*beta).
+        Apply mixer Hamiltonian e^(-i*beta*H_M) = prod_i RX_i(2*beta) (fully vectorized).
 
         RX(2*beta)|0> = cos(beta)|0> - i*sin(beta)|1>
         RX(2*beta)|1> = -i*sin(beta)|0> + cos(beta)|1>
-
-        This is implemented efficiently in the computational basis.
         """
         c = np.cos(beta)
-        s = -1j * np.sin(beta)  # -i * sin(beta)
+        s = -1j * np.sin(beta)
+        indices = np.arange(self.N, dtype=np.int64)
 
         for i in range(self.n_qubits):
             mask_i = 1 << i
-            for k in range(self.N):
-                if (k & mask_i) == 0:
-                    j = k | mask_i
-                    a_k = state[k]
-                    a_j = state[j]
-                    # RX(2*beta) rotation
-                    state[k] = c * a_k + s * a_j
-                    state[j] = s * a_k + c * a_j
+            bit_zero = (indices & mask_i) == 0
+            bit_one = ~bit_zero
+            a0 = state[bit_zero].copy()
+            a1 = state[bit_one].copy()
+            state[bit_zero] = c * a0 + s * a1
+            state[bit_one] = s * a0 + c * a1
         return state
 
     def _simulate_circuit(self, params: np.ndarray) -> np.ndarray:
@@ -146,35 +193,32 @@ class QAOA:
 
     def _expectation_value(self, params: np.ndarray) -> float:
         """
-        Compute ⟨H_C⟩ = expectation value of the cost Hamiltonian.
+        Compute ⟨H_C⟩ = expectation value of the cost Hamiltonian (fully vectorized).
 
         E = sum_i h_i * ⟨Z_i⟩ + sum_{i<j} J_{ij} * ⟨Z_i Z_j⟩
         """
         state = self._simulate_circuit(params)
+        probs = np.abs(state) ** 2
+        indices = np.arange(self.N, dtype=np.int64)
 
-        # Compute ⟨Z_i⟩ for each qubit
         z_exp = np.zeros(self.n_qubits)
         zz_exp = np.zeros((self.n_qubits, self.n_qubits))
 
-        for k in range(self.N):
-            prob = (state[k].real ** 2 + state[k].imag ** 2)
-            if prob < 1e-15:
-                continue
-            for i in range(self.n_qubits):
-                zi = -1.0 if (k >> i) & 1 else 1.0
-                z_exp[i] += prob * zi
-                for j in range(i + 1, self.n_qubits):
-                    zj = -1.0 if (k >> j) & 1 else 1.0
-                    zz_exp[i, j] += prob * zi * zj
-
-        # Total energy
-        energy = 0.0
         for i in range(self.n_qubits):
-            energy += self.cost_matrix[i, i] * z_exp[i]
+            mask_i = 1 << i
+            zi = np.where((indices & mask_i) != 0, -1.0, 1.0)
+            z_exp[i] = np.sum(probs * zi)
             for j in range(i + 1, self.n_qubits):
-                energy += self.cost_matrix[i, j] * zz_exp[i, j]
+                mask_j = 1 << j
+                zj = np.where((indices & mask_j) != 0, -1.0, 1.0)
+                zz_exp[i, j] = np.sum(probs * zi * zj)
 
-        # Guard against NaN
+        energy = self._offset
+        for i in range(self.n_qubits):
+            energy += self._h[i] * z_exp[i]
+            for j in range(i + 1, self.n_qubits):
+                energy += self._J[i, j] * zz_exp[i, j]
+
         if np.isnan(energy):
             return 0.0
 

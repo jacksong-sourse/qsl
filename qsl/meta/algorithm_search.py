@@ -138,13 +138,14 @@ class AlgorithmSearcher:
                  population_size: int = 20,
                  generations: int = 100,
                  mutation_rate: float = 0.1,
-                 crossover_rate: float = 0.5):
+                 crossover_rate: float = 0.5,
+                 use_simulation_fitness: bool = False):
         import warnings
-        if n_qubits > 6:
+        if n_qubits > 6 and use_simulation_fitness:
             warnings.warn(
-                f"AlgorithmSearcher with n_qubits={n_qubits} > 6 is extremely slow. "
-                f"Each fitness evaluation runs a full quantum state simulation "
-                f"(2^{n_qubits} states). Forcing cap at n_qubits=6.",
+                f"AlgorithmSearcher with n_qubits={n_qubits} > 6 and "
+                f"use_simulation_fitness=True is extremely slow. "
+                f"Forcing cap at n_qubits=6.",
                 RuntimeWarning, stacklevel=2
             )
             n_qubits = 6
@@ -153,41 +154,101 @@ class AlgorithmSearcher:
         self.generations = generations
         self.mutation_rate = mutation_rate
         self.crossover_rate = crossover_rate
+        # 默认使用轻量评估 (无完整态模拟); 设为 True 可退回旧的
+        # 基于 QuantumState 完整模拟的 fitness (慢, 仅适合小 n)
+        self.use_simulation_fitness = use_simulation_fitness
         self._best_genome: CircuitGenome = None
         self._history: List[float] = []
-    
+
+    # 纠缠门类型 (能产生纠缠的多量子比特门)
+    _ENTANGLING_GATES = frozenset(("CNOT", "CZ", "TOFFOLI"))
+
     def _fitness(self, genome: CircuitGenome) -> float:
         """
-        Evaluate circuit fitness on benchmark problems.
-        
-        Measures: how well the circuit creates an entangled state
-        and maintains coherence.
+        轻量电路适应度评估 (默认路径, 无量子态模拟)。
+
+        通过电路结构分析估计其产生纠缠的能力:
+        1. 纠缠门占比与位置分布 (CNOT/CZ/TOFFOLI)
+        2. 量子比特覆盖率 (多少比特被纠缠门连接)
+        3. 门多样性 (单比特门类型丰富度)
+        4. 深度惩罚 (过深电路在 NISQ 上噪声大)
+
+        use_simulation_fitness=True 时退回旧的完整态模拟评估
+        (每次 fitness 一次 O(2^n) 模拟, 仅适合 n <= 6)。
+        """
+        if self.use_simulation_fitness:
+            return self._fitness_by_simulation(genome)
+        return self._fitness_structural(genome)
+
+    def _fitness_structural(self, genome: CircuitGenome) -> float:
+        """基于电路结构分析的轻量 fitness, 复杂度 O(n_gates)。"""
+        gates = genome.gates
+        if not gates:
+            return 0.0
+
+        n_gates = len(gates)
+        entangling = [g for g in gates
+                      if g['gate'] in self._ENTANGLING_GATES]
+
+        # 1. 纠缠门占比 (目标区间 20%-60%)
+        ent_ratio = len(entangling) / n_gates
+        ent_score = 1.0 - abs(ent_ratio - 0.4) / 0.4
+        ent_score = max(0.0, min(1.0, ent_score))
+
+        # 2. 纠缠门覆盖的量子比特比例
+        covered = set()
+        for g in entangling:
+            if 'control' in g:
+                covered.add(g['control'])
+                covered.add(g['target'])
+            for t in g.get('targets', []):
+                covered.add(t)
+        coverage = len(covered) / self.n_qubits if self.n_qubits else 0.0
+
+        # 3. 单比特门多样性 (旋转门/H/S/T 种类)
+        single_types = {g['gate'] for g in gates
+                        if g['gate'] not in self._ENTANGLING_GATES
+                        and g['gate'] != 'SWAP'}
+        diversity = min(1.0, len(single_types) / 4.0)
+
+        # 4. 深度惩罚 (超过 20 门开始惩罚)
+        depth_penalty = min(1.0, genome.circuit_depth / 20.0)
+
+        fitness = (0.35 * ent_score + 0.30 * coverage
+                   + 0.15 * diversity + 0.20 * (1.0 - depth_penalty))
+        return float(max(0.0, min(1.0, fitness)))
+
+    def _fitness_by_simulation(self, genome: CircuitGenome) -> float:
+        """
+        基于完整量子态模拟的 fitness (旧路径, 慢)。
+
+        每次评估运行一次 O(2^n) QuantumState 模拟, 仅适合 n <= 6。
         """
         try:
             from ..core.state import QuantumState
-            
+
             state = QuantumState(self.n_qubits)
             circuit_fn = genome.to_statevector_circuit()
             circuit_fn(state)
-            
+
             # Fitness metrics:
             # 1. Normalization preserved
             norm_score = 1.0 if state.check_normalization() else 0.0
-            
+
             # 2. Entanglement: measure by non-separability of probabilities
             probs = state.probabilities()
             entropy = -sum(p * np.log(p + 1e-12) for p in probs if p > 0)
             max_entropy = np.log(len(probs))
             entropy_score = entropy / (max_entropy + 1e-12)
-            
+
             # 3. Circuit depth penalty (shorter is better)
             depth_penalty = min(1.0, genome.circuit_depth / 20.0)
-            
+
             # Combined score
             fitness = norm_score * 0.3 + entropy_score * 0.5 + (1 - depth_penalty) * 0.2
-            
+
             return fitness
-        
+
         except Exception:
             return 0.0
     

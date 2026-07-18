@@ -108,7 +108,9 @@ class PortfolioOptimizer:
             print(f"  Assets: {self.n_assets}, Budget: {self.budget}")
             print(f"  Expected Returns: {self.returns}")
 
-        qaoa = QAOA(n_qubits=self.n_assets, cost_matrix=Q, p=p)
+        # QUBO (0/1 变量) 矩阵, 由 QAOA 内部统一转换为 Ising (-1/+1)
+        qaoa = QAOA(n_qubits=self.n_assets, cost_matrix=Q, p=p,
+                    encoding="qubo")
         params, energy = qaoa.optimize(maxiter=200, verbose=False)
 
         bitstring, _ = qaoa.get_optimal_bitstring()
@@ -149,8 +151,17 @@ class PortfolioOptimizer:
 
         return self._result
 
-    def _compute_frontier(self, n_points: int = 10) -> List[Tuple[float, float]]:
-        """Compute efficient frontier by varying risk aversion."""
+    def _compute_frontier(self, n_points: int = 8) -> List[Tuple[float, float]]:
+        """
+        通过逐点运行 QAOA 计算效率前沿。
+
+        对每个风险厌恶系数 gamma, 构建对应的 QUBO 并运行 QAOA
+        (encoding="qubo", 内部自动完成 QUBO->Ising 变量转换),
+        将最优比特串解码为等权组合, 计算其 (风险, 收益)。
+        不使用任何经典解析求解 (如 np.linalg.solve)。
+        """
+        from ..algorithms.qaoa import QAOA
+
         frontier = []
 
         for gamma in np.linspace(0.1, 3.0, n_points):
@@ -164,15 +175,23 @@ class PortfolioOptimizer:
                 for j in range(i + 1, self.n_assets):
                     Q[i, j] = gamma * self.covariance[i, j] * 2 + penalty * 2
 
-            relaxed = np.linalg.solve(
-                Q + np.eye(self.n_assets) * 0.01,
-                np.ones(self.n_assets)
-            )
-            w = np.maximum(relaxed, 0)
-            w = w / (w.sum() + 1e-10)
+            qaoa = QAOA(n_qubits=self.n_assets, cost_matrix=Q, p=1,
+                        encoding="qubo")
+            qaoa.optimize(maxiter=60, verbose=False)
+            bitstring, _ = qaoa.get_optimal_bitstring()
 
-            exp_ret = np.dot(w, self.returns)
-            risk = np.sqrt(w @ self.covariance @ w)
+            # 解码比特串为等权权重
+            w = np.zeros(self.n_assets)
+            for i in range(self.n_assets):
+                if (bitstring >> i) & 1:
+                    w[i] = 1.0
+            if w.sum() > 0:
+                w = w / w.sum()
+            else:
+                continue
+
+            exp_ret = float(np.dot(w, self.returns))
+            risk = float(np.sqrt(w @ self.covariance @ w))
             frontier.append((risk, exp_ret))
 
         return sorted(frontier, key=lambda x: x[0])

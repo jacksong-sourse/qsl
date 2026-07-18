@@ -9,6 +9,18 @@ from typing import Optional
 from .layers import QuantumLayer
 
 
+def _bernoulli_straight_through(probs: torch.Tensor) -> torch.Tensor:
+    """
+    可微的 Bernoulli 采样 (Straight-Through Estimator)。
+
+    前向传播: 返回硬二值采样结果 (与 torch.bernoulli 相同分布);
+    反向传播: 梯度恒等传递到 probs (梯度估计的无偏一阶近似),
+    避免 torch.bernoulli 不可微导致的生成器梯度链断裂。
+    """
+    hard = torch.bernoulli(probs)
+    return probs + (hard - probs).detach()
+
+
 class QuantumGenerator(nn.Module):
     """
     True quantum generator using parameterized quantum circuit.
@@ -54,7 +66,7 @@ class QuantumGenerator(nn.Module):
         """Generate samples from latent noise using quantum circuit."""
         quantum_out = self.quantum_layer(z)
         probs = self.classical_head(quantum_out)
-        samples = torch.bernoulli(probs)
+        samples = _bernoulli_straight_through(probs)
         return samples
 
     def sample(self, n_samples: int, device: str = 'cpu') -> np.ndarray:
@@ -110,7 +122,7 @@ class ClassicalAngularGenerator(nn.Module):
         """Generate samples from latent noise."""
         angles = self.fc(z)
         probs = self._circuit_to_probabilities(angles)
-        samples = torch.bernoulli(probs[:, :self.data_dim])
+        samples = _bernoulli_straight_through(probs[:, :self.data_dim])
         return samples
 
     def sample(self, n_samples: int, device: str = 'cpu') -> np.ndarray:
@@ -142,7 +154,7 @@ class ClassicalGenerator(nn.Module):
         )
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        return torch.bernoulli(self.fc(z))
+        return _bernoulli_straight_through(self.fc(z))
 
     def sample(self, n_samples: int, device: str = 'cpu') -> np.ndarray:
         self.eval()

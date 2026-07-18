@@ -18,7 +18,7 @@ Quick start:
     >>> result = compiler.compile_and_run(program)
 """
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 __author__ = "Song Ziming"
 __email__ = "15011462616@163.com"
 
@@ -42,8 +42,30 @@ from .quantum_gates import (
     I, X, Y, Z, H, S, T,
     rx, ry, rz, u3,
     swap, cswap, mcx,
-    kron, controlled_gate,
+    kronecker_prod, kron, controlled_gate,
 )
+
+# ----------------------------------------------------------------
+# 真机后端 SDK 可用性检查 (导入时给出清晰警告)
+# ----------------------------------------------------------------
+import warnings as _warnings
+from importlib.util import find_spec as _find_spec
+
+_MISSING_BACKEND_SDK = []
+if _find_spec("qiskit") is None or _find_spec("qiskit_ibm_runtime") is None:
+    _MISSING_BACKEND_SDK.append(
+        "IBM Quantum (pip install qiskit qiskit-aer qiskit-ibm-runtime)")
+if _find_spec("braket") is None:
+    _MISSING_BACKEND_SDK.append(
+        "AWS Braket (pip install boto3 amazon-braket-sdk)")
+if _MISSING_BACKEND_SDK:
+    _warnings.warn(
+        "QSL: 以下真机后端 SDK 未安装, 对应后端当前不可用: "
+        + "; ".join(_MISSING_BACKEND_SDK)
+        + "。本地模拟器后端不受影响。",
+        RuntimeWarning, stacklevel=2,
+    )
+del _warnings, _find_spec, _MISSING_BACKEND_SDK
 
 # ----------------------------------------------------------------
 # Quantum Algorithms (requires numpy, scipy optional)
@@ -132,7 +154,7 @@ __all__ = [
     "I", "X", "Y", "Z", "H", "S", "T",
     "rx", "ry", "rz", "u3",
     "swap", "cswap", "mcx",
-    "kron", "controlled_gate",
+    "kronecker_prod", "kron", "controlled_gate",
     # Algorithms
     "QuantumFourierTransform", "ShorSolver", "QAOA", "VQE",
     # Compiler

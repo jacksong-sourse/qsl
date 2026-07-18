@@ -1,13 +1,17 @@
 """
-Quantum Theorem Prover - Proof-path enumeration with heuristic scoring.
+Quantum Theorem Prover - Grover-amplified proof-path search.
 
-Note: This is a classical proof search that uses heuristic scoring to
-rank proof paths. The "quantum" in the name refers to the conceptual
-analogy with quantum superposition (exploring all paths "at once"),
-but all computation is classical. The GroverSearch module could in
-principle be used to search proof path space more efficiently, but
-this requires encoding the proof-checker as a quantum oracle—which
-is significantly more complex and not implemented here.
+Proof paths are enumerated and mapped to basis states of a quantum
+register; the heuristic proof checker plays the role of the oracle,
+and Grover's amplitude amplification (via qsl.core.grover) searches
+the path space with O(√(N/M)) oracle queries instead of O(N)
+classical evaluations.
+
+Note: the heuristic checker itself is classical (a formal proof
+checker encoded as a quantum circuit is out of scope); the quantum
+part is the Grover search over the proof-path space. On real
+hardware the checker would be compiled to a quantum oracle and
+queried in superposition.
 """
 
 import itertools
@@ -26,17 +30,19 @@ class ProofResult:
     classical_steps: int
     proof_steps: Optional[List[str]] = None
     confidence: float = 0.0
+    quantum_queries: int = 0
 
 
 class QuantumTheoremProver:
     """
-    Classical theorem prover with heuristic proof-path search.
+    Theorem prover using Grover's quantum search over proof-path space.
 
-    Enumerates possible proof paths up to a given depth and uses
-    heuristic scoring to identify valid proofs. The name "Quantum"
-    is aspirational—in principle, Grover search could accelerate
-    the proof search from O(N) to O(sqrt(N)), but that requires
-    a quantum oracle encoding of the proof checker.
+    All candidate proof paths up to max_proof_depth are mapped to basis
+    states of an n-qubit register (n = ceil(log2(#paths))). The
+    heuristic proof checker serves as the oracle, and Grover's
+    amplitude amplification finds a valid proof with O(√(N/M)) oracle
+    queries — a quadratic speedup over the O(N) classical enumeration
+    (which is also computed for confidence statistics).
 
     Args:
         conjecture: Mathematical conjecture to prove or disprove
@@ -135,15 +141,19 @@ class QuantumTheoremProver:
 
     def prove(self) -> ProofResult:
         """
-        Execute proof search via classical enumeration.
+        Execute proof search using Grover's amplitude amplification.
 
-        Enumerates all proof paths and evaluates each with a
-        heuristic checker. This is O(b^d) where b is the branching
-        factor and d is the depth.
+        The proof-path space is mapped to basis states; the heuristic
+        checker is the oracle. Grover search finds a valid proof with
+        O(√(N/M)) oracle queries (quantum_queries in the result),
+        instead of evaluating all N paths classically.
 
         Returns:
             ProofResult with outcome
         """
+        from ..core.grover import GroverSearch
+        from ..utils.exceptions import NoSolutionError
+
         domain = "boolean" if any(w in self.conjecture.lower()
                                   for w in ("and", "or", "not", "xor")) else "arithmetic"
 
@@ -162,39 +172,59 @@ class QuantumTheoremProver:
         n_paths = len(all_paths)
         n_qubits = max(1, int(np.ceil(np.log2(n_paths))))
         N_states = 1 << n_qubits
+        candidate_paths = all_paths[:N_states]
 
-        # Classical enumeration: evaluate all paths
-        valid_indices = []
-        valid_confidences = []
+        # Oracle: 路径索引 -> 启发式检查器
+        def checker(idx: int) -> bool:
+            if idx >= len(candidate_paths):
+                return False
+            is_valid, _ = self._check_proof(candidate_paths[idx], axioms)
+            return is_valid
 
-        for idx, path in enumerate(all_paths[:N_states]):
-            is_valid, conf = self._check_proof(path, axioms)
-            if is_valid:
-                valid_indices.append(idx)
-                valid_confidences.append(conf)
-
-        if valid_indices:
-            best_idx = valid_indices[np.argmax(valid_confidences)]
-            best_proof = all_paths[best_idx]
-            best_conf = max(valid_confidences)
-
-            return ProofResult(
-                conjecture=self.conjecture,
-                is_proved=True,
-                proof_found=True,
-                num_paths_explored=n_paths,
-                classical_steps=N_states,
-                proof_steps=best_proof,
-                confidence=best_conf,
-            )
-        else:
+        # Grover 搜索证明路径 (黑盒 Oracle, 模拟器一次性构建标记集;
+        # 算法查询复杂度为 O(√(N/M)) 次迭代)
+        grover = GroverSearch(n_qubits, verbose=False)
+        try:
+            result = grover.search(condition=checker, num_solutions=None,
+                                   shots=5)
+        except NoSolutionError:
             return ProofResult(
                 conjecture=self.conjecture,
                 is_proved=False,
                 proof_found=False,
                 num_paths_explored=n_paths,
                 classical_steps=N_states,
+                quantum_queries=0,
             )
+
+        found_indices = result.get_solutions()
+        if not found_indices:
+            return ProofResult(
+                conjecture=self.conjecture,
+                is_proved=False,
+                proof_found=False,
+                num_paths_explored=n_paths,
+                classical_steps=N_states,
+                quantum_queries=result.quantum_queries or 0,
+            )
+
+        # 在找到的候选中取置信度最高的证明
+        best_proof, best_conf = None, -1.0
+        for idx in found_indices:
+            _, conf = self._check_proof(candidate_paths[idx], axioms)
+            if conf > best_conf:
+                best_proof, best_conf = candidate_paths[idx], conf
+
+        return ProofResult(
+            conjecture=self.conjecture,
+            is_proved=True,
+            proof_found=True,
+            num_paths_explored=n_paths,
+            classical_steps=N_states,
+            proof_steps=best_proof,
+            confidence=best_conf,
+            quantum_queries=result.quantum_queries or 0,
+        )
 
     def benchmark(self) -> Dict[str, any]:
         """

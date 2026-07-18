@@ -58,7 +58,7 @@ class AbstractBackend(ABC):
     def run_grover_search(self,
                            n_qubits: int,
                            oracle: Callable[[int], bool],
-                           num_solutions: int,
+                           num_solutions: Optional[int],
                            shots: int,
                            verbose: bool = False,
                            **run_options) -> GroverResult:
@@ -68,10 +68,10 @@ class AbstractBackend(ABC):
         参数:
             n_qubits: 量子比特数
             oracle: Boolean oracle 函数 f(x) -> bool
-            num_solutions: 解的数量 M
+            num_solutions: 解的数量 M (None 则使用 BBHT 指数搜索)
             shots: 测量次数
             verbose: 是否输出过程信息
-            **run_options: 后端特定选项
+            **run_options: 后端特定选项 (如 oracle_expressions)
 
         返回:
             GroverResult 包含搜索完整结果

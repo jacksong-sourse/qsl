@@ -189,7 +189,8 @@ class TestCompiler:
         compiler = QSLCompiler(verbose=False)
         result = compiler.compile_and_run(program)
         assert result.success_count > 0
-        assert result.num_solutions > 0
+        # BBHT 路径下解数量未知 (num_solutions=None), 不断言具体 M
+        assert len(result.get_solutions()) > 0
 
     def test_compile_and_analyze(self):
         """编译分析不执行。"""
@@ -251,7 +252,7 @@ class TestCompiler:
             shots=5,
         )
         result = compile_and_run(program, verbose=False)
-        assert result.num_solutions == 1  # |11> = 3
+        assert 3 in result.get_solutions()  # |11> = 3
 
     def test_convenience_analyze(self):
         """便捷函数 analyze。"""

@@ -141,15 +141,6 @@ class TestQuantumLayer:
         assert torch.all(output >= -1.0), "存在期望值 < -1"
         assert torch.all(output <= 1.0), "存在期望值 > 1"
 
-    @pytest.mark.xfail(
-        reason=(
-            "layers.py 中 _apply_variational_circuit 和 _encode_state 使用了"
-            "原地张量修改（state[..., k] = ...），破坏了 autograd 计算图，"
-            "导致 backward() 报错 RuntimeError: inplace operation"
-        ),
-        raises=RuntimeError,
-        strict=True,
-    )
     def test_gradient_computation(self):
         """反向传播后参数具有梯度。"""
         torch.manual_seed(42)
@@ -290,14 +281,6 @@ class TestQNN:
         proba = model.predict_proba(X)
         assert proba.shape == (10, 3), f"三分类概率形状应为 (10, 3)，实际 {proba.shape}"
 
-    @pytest.mark.xfail(
-        reason=(
-            "layers.py 中使用原地张量修改导致 autograd 计算图断裂，"
-            "fit() 内部的 loss.backward() 报 RuntimeError"
-        ),
-        raises=RuntimeError,
-        strict=True,
-    )
     def test_fit_on_xor_like_data(self):
         """在类 XOR 数据上训练，损失应下降。"""
         rng = np.random.RandomState(42)
@@ -317,14 +300,6 @@ class TestQNN:
             f"训练损失应下降: 初始 {initial_loss:.4f} -> 最终 {final_loss:.4f}"
         )
 
-    @pytest.mark.xfail(
-        reason=(
-            "layers.py 中使用原地张量修改导致 autograd 计算图断裂，"
-            "fit() 内部的 loss.backward() 报 RuntimeError"
-        ),
-        raises=RuntimeError,
-        strict=True,
-    )
     def test_training_loss_decreases_monotonically_trend(self):
         """使用更多 epoch 验证损失总体下降趋势且无 NaN/Inf。"""
         rng = np.random.RandomState(42)
