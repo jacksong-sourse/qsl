@@ -97,11 +97,12 @@ full = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/qsl-quantum/qsl"
-Repository = "https://github.com/qsl-quantum/qsl"
-Issues = "https://github.com/qsl-quantum/qsl/issues"
-Documentation = "https://github.com/qsl-quantum/qsl#readme"
-Changelog = "https://github.com/qsl-quantum/qsl/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/jacksong-sourse/qsl"
+Repository = "https://github.com/jacksong-sourse/qsl"
+"Gitee Mirror" = "https://gitee.com/song-jack/qsl"
+Issues = "https://github.com/jacksong-sourse/qsl/issues"
+Documentation = "https://github.com/jacksong-sourse/qsl#readme"
+Changelog = "https://github.com/jacksong-sourse/qsl/blob/main/CHANGELOG.md"
 
 [project.scripts]
 qsl = "qsl.__main__:main"

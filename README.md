@@ -459,7 +459,7 @@ qsl/
 ## 🛠️ 开发
 
 ```bash
-git clone https://gitee.com/song-jack/qsl.git
+git clone https://github.com/jacksong-sourse/qsl.git
 cd qsl
 pip install -e ".[dev,viz,algorithms]"
 
