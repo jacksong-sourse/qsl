@@ -18,7 +18,7 @@ Quick start:
     >>> result = compiler.compile_and_run(program)
 """
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 __author__ = "Song Ziming"
 __email__ = "15011462616@163.com"
 
@@ -56,26 +56,50 @@ from .circuit.qasm import dumps_qasm2, loads_qasm2, dumps_qasm3, QASMParseError
 from .circuit.converters import to_qiskit, from_qiskit, to_cirq
 
 # ----------------------------------------------------------------
-# 真机后端 SDK 可用性检查 (导入时给出清晰警告)
+# 真机后端 SDK 可用性检查
+#
+# 设计说明 (修复"import 时全局 RuntimeWarning 不可抑制"的问题):
+#   - 不再在模块顶层无条件 warn, 而是仅当用户首次访问真机后端
+#     (IBMBackend / AWSBraketBackend) 时才通过 __getattr__ 提示。
+#   - 可用环境变量 QSL_SILENT_BACKEND_CHECK=1 完全静默该检查。
+#   - 这样 `import qsl` 保持干净, 用户可在 import 前用
+#     warnings.filterwarnings('ignore') 正常控制输出。
 # ----------------------------------------------------------------
-import warnings as _warnings
+import os as _os
 from importlib.util import find_spec as _find_spec
 
-_MISSING_BACKEND_SDK = []
-if _find_spec("qiskit") is None or _find_spec("qiskit_ibm_runtime") is None:
-    _MISSING_BACKEND_SDK.append(
-        "IBM Quantum (pip install qiskit qiskit-aer qiskit-ibm-runtime)")
-if _find_spec("braket") is None:
-    _MISSING_BACKEND_SDK.append(
-        "AWS Braket (pip install boto3 amazon-braket-sdk)")
-if _MISSING_BACKEND_SDK:
-    _warnings.warn(
-        "QSL: 以下真机后端 SDK 未安装, 对应后端当前不可用: "
-        + "; ".join(_MISSING_BACKEND_SDK)
-        + "。本地模拟器后端不受影响。",
-        RuntimeWarning, stacklevel=2,
-    )
-del _warnings, _find_spec, _MISSING_BACKEND_SDK
+_BACKEND_WARNING_EMITTED = False
+
+
+def _missing_backend_sdks():
+    """返回未安装的真机后端 SDK 描述列表。"""
+    missing = []
+    if _find_spec("qiskit") is None or _find_spec("qiskit_ibm_runtime") is None:
+        missing.append(
+            "IBM Quantum (pip install qiskit qiskit-aer qiskit-ibm-runtime)")
+    if _find_spec("braket") is None:
+        missing.append(
+            "AWS Braket (pip install boto3 amazon-braket-sdk)")
+    return missing
+
+
+def _warn_backend_once():
+    """仅在访问真机后端时提示一次缺失的 SDK。"""
+    global _BACKEND_WARNING_EMITTED
+    if _BACKEND_WARNING_EMITTED:
+        return
+    if _os.environ.get("QSL_SILENT_BACKEND_CHECK"):
+        return
+    missing = _missing_backend_sdks()
+    if missing:
+        import warnings as _w
+        _w.warn(
+            "QSL: 以下真机后端 SDK 未安装, 对应后端当前不可用: "
+            + "; ".join(missing)
+            + "。本地模拟器后端不受影响。",
+            RuntimeWarning, stacklevel=3,
+        )
+    _BACKEND_WARNING_EMITTED = True
 
 # ----------------------------------------------------------------
 # Quantum Algorithms (requires numpy, scipy optional)
@@ -108,6 +132,7 @@ _LAZY_IMPORTS = {
     "QNN": ("qsl.qml.qnn", "QNN"),
     "quantum_kernel": ("qsl.qml.kernels", "quantum_kernel"),
     "QuantumSVM": ("qsl.qml.qsvm", "QuantumSVM"),
+    "QSVM": ("qsl.qml.qsvm", "QSVM"),
     "QGAN": ("qsl.qml.qgan", "QGAN"),
     "IBMBackend": ("qsl.backends.ibm", "IBMBackend"),
     "AWSBraketBackend": ("qsl.backends.aws_braket", "AWSBraketBackend"),
@@ -149,6 +174,10 @@ _LAZY_IMPORTS = {
 def __getattr__(name):
     """Lazy import for heavy/optional dependencies."""
     import importlib
+
+    # 首次访问真机后端时才提示缺失的 SDK (可静默, 见模块顶部说明)
+    if name in ("IBMBackend", "AWSBraketBackend"):
+        _warn_backend_once()
 
     if name in _LAZY_IMPORTS:
         module_path, attr_name = _LAZY_IMPORTS[name]
@@ -196,7 +225,7 @@ __all__ = [
     "zne", "readout_error_correction", "build_confusion_matrix",
     "richardson_extrapolate",
     # Lazy
-    "QuantumLayer", "QNN", "quantum_kernel", "QuantumSVM", "QGAN",
+    "QuantumLayer", "QNN", "quantum_kernel", "QuantumSVM", "QSVM", "QGAN",
     "IBMBackend", "AWSBraketBackend",
     "ProblemTranslator", "QuantumAgent", "HypothesisTester",
     "DiscoveryPipeline", "ResultExplainer",

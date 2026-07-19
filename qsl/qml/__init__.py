@@ -11,7 +11,7 @@ try:
     from .layers import QuantumLayer
     from .qnn import QNN
     from .kernels import quantum_kernel
-    from .qsvm import QuantumSVM
+    from .qsvm import QuantumSVM, QSVM
     from .qgan import QGAN
 except ImportError as e:
     warnings.warn(
@@ -22,6 +22,7 @@ except ImportError as e:
     QNN = None
     quantum_kernel = None
     QuantumSVM = None
+    QSVM = None
     QGAN = None
 
-__all__ = ["QuantumLayer", "QNN", "quantum_kernel", "QuantumSVM", "QGAN"]
+__all__ = ["QuantumLayer", "QNN", "quantum_kernel", "QuantumSVM", "QSVM", "QGAN"]

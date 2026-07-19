@@ -306,8 +306,8 @@ cost = QAOA.maxcut_cost_matrix(adj)
 
 qaoa = QAOA(n_qubits=4, cost_matrix=cost, p=2)
 qaoa.optimize(maxiter=200)
-print("Best cut value:", qaoa.optimal_value)
-print("Best bitstring:", bin(qaoa.optimal_bitstring))
+print("Best cut value:", qaoa.optimal_energy)
+print("Best bitstring:", qaoa.optimal_bitstring_str)  # e.g. "0101"
 ```
 
 ### VQE — Variational Quantum Eigensolver

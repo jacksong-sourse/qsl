@@ -420,26 +420,47 @@ class QSLCompiler:
 # 便捷函数
 # ----------------------------------------------------------------
 
-def compile_and_run(program: QSLProgram,
+def compile_and_run(program,
                      backend: str = "simulator",
                      verbose: bool = False,
-                     **options) -> GroverResult:
+                     **options):
     """
-    编译并执行 QSL 程序的一次性便捷函数。
+    编译并执行的一次性便捷函数。
 
-    等同于:
-        >>> compiler = QSLCompiler(backend=backend)
-        >>> result = compiler.compile_and_run(program, **options)
+    支持两种输入:
+        - ``QSLProgram``: 走 DSL 编译流程 (Grover/Shor/QAOA/VQE),
+          等同于 ``QSLCompiler(backend).compile_and_run(program)``。
+        - ``QuantumCircuit``: 直接执行电路并返回 ``ExecutionResult``,
+          免去先学 DSL 的负担, 降低新用户学习曲线。
 
     参数:
-        program: QSL 程序
-        backend: 后端名称
+        program: ``QSLProgram`` 或 ``QuantumCircuit``
+        backend: 后端名称 (仅对 ``QSLProgram`` 有意义; 电路走本地模拟器)
         verbose: 是否详细输出
-        **options: 额外后端选项
+        **options: 额外选项; 对电路则透传给 ``QuantumCircuit.execute()``
+                   (如 shots / seed / initial_state)
 
     返回:
-        GroverResult
+        ``GroverResult`` / ``AlgorithmResult`` (QSLProgram) 或
+        ``ExecutionResult`` (QuantumCircuit)
+
+    示例:
+        >>> from qsl import QuantumCircuit, compile_and_run
+        >>> qc = QuantumCircuit(2); qc.h(0); qc.cx(0, 1)
+        >>> res = compile_and_run(qc, shots=512)
+        >>> res.counts   # {0: ~256, 3: ~256}
     """
+    # 避免顶层循环导入, 延迟到调用时引入
+    from ..circuit.circuit import QuantumCircuit
+    if isinstance(program, QuantumCircuit):
+        return program.execute(**options)
+
+    if not isinstance(program, QSLProgram):
+        raise ProgramValidationError(
+            "program", type(program).__name__,
+            "compile_and_run 仅接受 QSLProgram 或 QuantumCircuit"
+        )
+
     compiler = QSLCompiler(backend=backend, verbose=verbose)
     return compiler.compile_and_run(program, **options)
 

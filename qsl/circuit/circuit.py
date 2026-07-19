@@ -161,6 +161,11 @@ class QuantumCircuit:
         """电路宽度 (量子比特数, Qiskit 兼容)。"""
         return self.num_qubits
 
+    @property
+    def n_qubits(self) -> int:
+        """量子比特数 (num_qubits 的别名, 接口统一)。"""
+        return self.num_qubits
+
     def num_nonlocal_gates(self) -> int:
         """非局部门数 (作用于 ≥2 比特的门, barrier 不计)。"""
         return sum(1 for inst in self.data

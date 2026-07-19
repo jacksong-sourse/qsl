@@ -190,3 +190,8 @@ class QuantumSVM(BaseEstimator, ClassifierMixin):
         for key, value in params.items():
             setattr(self, key, value)
         return self
+
+
+# Backward/forward-compatible alias: 文档与外部代码常引用 QSVM,
+# 与 Qiskit Machine Learning 的命名保持一致。
+QSVM = QuantumSVM

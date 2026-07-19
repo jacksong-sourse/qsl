@@ -106,6 +106,14 @@ class ClassicalAngularGenerator(nn.Module):
             nn.Linear(64, self.n_qubits * 3),
         )
 
+        # 当 n_qubits < data_dim 时, 概率向量只有 n_qubits 列,
+        # 不足以喂给判别器 (期望 data_dim 列)。增加一个线性投影
+        # 把 n_qubits 维提升到 data_dim 维, 保证输出维度恒为 data_dim。
+        if self.n_qubits < data_dim:
+            self.proj = nn.Linear(self.n_qubits, data_dim)
+        else:
+            self.proj = None
+
     def _circuit_to_probabilities(self, angles: torch.Tensor) -> torch.Tensor:
         """
         Convert "circuit" angles to measurement probabilities.
@@ -122,7 +130,12 @@ class ClassicalAngularGenerator(nn.Module):
         """Generate samples from latent noise."""
         angles = self.fc(z)
         probs = self._circuit_to_probabilities(angles)
-        samples = _bernoulli_straight_through(probs[:, :self.data_dim])
+        if self.proj is not None:
+            # n_qubits < data_dim: 先投影到 data_dim 维 (输出已是 [0,1] 概率空间)
+            probs = torch.sigmoid(self.proj(probs))
+        else:
+            probs = probs[:, :self.data_dim]
+        samples = _bernoulli_straight_through(probs)
         return samples
 
     def sample(self, n_samples: int, device: str = 'cpu') -> np.ndarray:

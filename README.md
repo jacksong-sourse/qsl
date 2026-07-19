@@ -298,8 +298,8 @@ cost = QAOA.maxcut_cost_matrix(adj)
 
 qaoa = QAOA(n_qubits=4, cost_matrix=cost, p=2)
 qaoa.optimize(maxiter=200)
-print("最优切割值:", qaoa.optimal_value)
-print("最优比特串:", bin(qaoa.optimal_bitstring))
+print("最优切割值:", qaoa.optimal_energy)
+print("最优比特串:", qaoa.optimal_bitstring_str)  # 如 "0101"
 ```
 
 ### VQE — 变分量子本征求解

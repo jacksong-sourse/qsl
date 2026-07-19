@@ -15,13 +15,14 @@ class AutoBackend:
     - n_qubits > 127: AWS Braket (largest capacity)
 
     Args:
-        max_qubits: Maximum qubits needed
+        max_qubits: Maximum qubits needed (default 20, the local
+                    simulator limit — the most common safe choice)
         need_error_mitigation: Whether error mitigation is needed
         prefer: Backend preference hint ("simulator", "ibm", "aws")
     """
 
     def __init__(self,
-                 max_qubits: int,
+                 max_qubits: int = 20,
                  need_error_mitigation: bool = False,
                  prefer: str = "auto",
                  ibm_token: Optional[str] = None,

@@ -3,6 +3,23 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，
 项目版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.2] - 2026-07-19
+
+### Added
+
+- `QuantumCircuit.n_qubits` 属性：`num_qubits` 的别名，与 Qiskit 及 qsl 算法层接口统一（`qc.n_qubits` 不再返回 None）。
+- `QAOA.optimal_bitstring_str` 属性：返回高位在左的二进制字符串（如 `"0101"`），与 `optimal_bitstring`（int 基态索引，保持向后兼容）互补。
+- `QSVM` 导出名：`QuantumSVM` 的别名，与文档及 Qiskit Machine Learning 命名保持一致；`from qsl.qml import QSVM` 与 `qsl.QSVM` 均可用。
+- `compile_and_run()` 支持直接接受 `QuantumCircuit`：新用户无需先学 DSL 即可执行电路（透传 `shots` / `seed` 等选项到 `QuantumCircuit.execute()`）。
+- 环境变量 `QSL_SILENT_BACKEND_CHECK=1`：完全静默真机后端 SDK 检查。
+
+### Fixed
+
+- **QGAN 训练崩溃（`RuntimeError: mat1 and mat2 shapes cannot be multiplied`）**：当 `n_qubits < data_dim` 时，`ClassicalAngularGenerator` 输出的概率向量维度（n_qubits）小于判别器输入维度（data_dim）。新增线性投影层将 n_qubits 维提升至 data_dim 维，保证输出维度恒为 data_dim。
+- **`import qsl` 时不可抑制的全局 RuntimeWarning**：后端 SDK 检查从模块顶层移至 `__getattr__` 惰性触发——仅在首次访问 `IBMBackend` / `AWSBraketBackend` 时提示一次，普通 `import qsl` 保持干净，且可在导入前用 `warnings.filterwarnings('ignore')` 正常控制。
+- **`AutoBackend()` 必须传 `max_qubits`**：`max_qubits` 现默认 20（本地模拟器上限，最常用的安全选择），`AutoBackend()` 可直接无参调用。
+- **README QAOA 示例错误**：`qaoa.optimal_value` 修正为 `qaoa.optimal_energy`；`bin(qaoa.optimal_bitstring)` 改用更直观的 `qaoa.optimal_bitstring_str`。
+
 ## [0.6.1] - 2026-07-19
 
 ### Added

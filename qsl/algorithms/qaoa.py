@@ -328,8 +328,24 @@ class QAOA:
 
     @property
     def optimal_bitstring(self) -> Optional[int]:
-        """Optimal bitstring found as integer (may be None before optimization)."""
+        """
+        最优解的基态索引 (int 形式, 即比特串按小端序编码的整数)。
+
+        例如 n_qubits=3 时返回值 1 表示比特串 "100" (q0=1, q1=0, q2=0)。
+        若需要 "010" 风格的字符串形式, 请使用 ``optimal_bitstring_str``。
+        """
         return self._optimal_bitstring
+
+    @property
+    def optimal_bitstring_str(self) -> Optional[str]:
+        """
+        最优解的比特串 (str 形式, 高位在左, 与 ``format(x, '0nb')`` 一致)。
+
+        例如 n_qubits=3 时返回 "100"; optimize() 之前返回 None。
+        """
+        if self._optimal_bitstring is None:
+            return None
+        return format(self._optimal_bitstring, f"0{self.n_qubits}b")
 
     @staticmethod
     def maxcut_cost_matrix(adjacency_matrix: np.ndarray) -> np.ndarray:
