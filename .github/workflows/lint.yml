@@ -1,0 +1,43 @@
+name: Lint
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black
+
+      # 存量代码尚有 ~100 条 lint 告警 (E501/E702/E402/F841 等),
+      # 直接全量 ruff check 会长期红 CI, 因此分阶段收紧:
+      #   阶段 1 (当前): 全量检查仅作报告 (continue-on-error),
+      #           致命错误集 (语法/未定义名/除零等) 告警但不阻断;
+      #   阶段 2 (存量清理后): 将致命错误集改为阻断 (去掉 --exit-zero),
+      #           再逐步把全量检查改为阻断。
+      - name: Ruff full report (informational)
+        run: ruff check qsl/ --statistics || true
+
+      - name: Ruff fatal errors only (E9,F63,F7,F82)
+        # 当前存量 2 条 F821 (qsl/__main__.py 内 parse_qsl/QSLCompiler 的
+        # 延迟导入名), 修复前用 --exit-zero 告警不阻断; 修复后应去掉。
+        run: ruff check qsl/ --select E9,F63,F7,F82 --exit-zero
+
+      - name: Black format check (warning mode)
+        # 存量代码未按 black 格式化, 先告警 (|| true); 全仓格式化后
+        # 改为严格 --check 阻断。
+        run: black --check qsl/ || true

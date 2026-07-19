@@ -1,7 +1,9 @@
 """QSL AI Quantum Scientist - LLM-powered quantum computing automation.
 
-Supports OpenAI (GPT-4) and DeepSeek (deepseek-chat / deepseek-reasoner).
-Set DEEPSEEK_API_KEY env var to use DeepSeek, or OPENAI_API_KEY for OpenAI.
+LLM access is abstracted via qsl.ai.llm_provider (OpenAI / DeepSeek / Kimi /
+Qwen / Ollama). Set QSL_LLM to pick a provider explicitly, or just set the
+corresponding API key env var (DEEPSEEK_API_KEY, MOONSHOT_API_KEY,
+OPENAI_API_KEY, DASHSCOPE_API_KEY) and let create_provider auto-detect.
 """
 
 import os
@@ -45,6 +47,31 @@ def _create_llm(model=None, api_key=None):
 
 
 try:
+    from .llm_provider import (
+        LLMProvider,
+        OpenAIProvider,
+        DeepSeekProvider,
+        KimiProvider,
+        QwenProvider,
+        OllamaProvider,
+        LLMConfig,
+        create_provider,
+        set_default_provider,
+        get_default_provider,
+    )
+except ImportError:
+    LLMProvider = None
+    OpenAIProvider = None
+    DeepSeekProvider = None
+    KimiProvider = None
+    QwenProvider = None
+    OllamaProvider = None
+    LLMConfig = None
+    create_provider = None
+    set_default_provider = None
+    get_default_provider = None
+
+try:
     from .translator import ProblemTranslator
 except ImportError:
     ProblemTranslator = None
@@ -71,8 +98,18 @@ except ImportError:
 
 __all__ = [
     "ProblemTranslator",
-    "QuantumAgent", 
+    "QuantumAgent",
     "HypothesisTester",
     "DiscoveryPipeline",
     "ResultExplainer",
+    "LLMProvider",
+    "OpenAIProvider",
+    "DeepSeekProvider",
+    "KimiProvider",
+    "QwenProvider",
+    "OllamaProvider",
+    "LLMConfig",
+    "create_provider",
+    "set_default_provider",
+    "get_default_provider",
 ]

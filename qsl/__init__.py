@@ -18,7 +18,7 @@ Quick start:
     >>> result = compiler.compile_and_run(program)
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.1"
 __author__ = "Song Ziming"
 __email__ = "15011462616@163.com"
 
@@ -29,7 +29,7 @@ from .compiler.program import QSLProgram
 from .compiler.compiler import QSLCompiler, compile_and_run, analyze
 from .compiler.dsl import parse_qsl
 from .core.parser import parse_bool
-from .core.state import QuantumState, DensityMatrix
+from .core.state import QuantumState, DensityMatrix, NoiseModel
 from .core.grover import GroverSearch, GroverResult, solve_sat
 from .backends.registry import list_backends, get_backend
 from .backends.simulator import SimulatorBackend
@@ -44,6 +44,16 @@ from .quantum_gates import (
     swap, cswap, mcx,
     kronecker_prod, kron, controlled_gate,
 )
+
+# ----------------------------------------------------------------
+# Circuit API (Qiskit 对标的电路层, 仅依赖 numpy)
+# ----------------------------------------------------------------
+from .circuit import (
+    QuantumCircuit, Gate, Instruction, Parameter, ParameterExpression,
+    ExecutionResult, library,
+)
+from .circuit.qasm import dumps_qasm2, loads_qasm2, dumps_qasm3, QASMParseError
+from .circuit.converters import to_qiskit, from_qiskit, to_cirq
 
 # ----------------------------------------------------------------
 # 真机后端 SDK 可用性检查 (导入时给出清晰警告)
@@ -106,6 +116,23 @@ _LAZY_IMPORTS = {
     "HypothesisTester": ("qsl.ai.hypotheses", "HypothesisTester"),
     "DiscoveryPipeline": ("qsl.ai.discovery", "DiscoveryPipeline"),
     "ResultExplainer": ("qsl.ai.explainer", "ResultExplainer"),
+    # AI: LLM 抽象层 / 自动验证 / 结构化报告 / 中文演示
+    "LLMProvider": ("qsl.ai.llm_provider", "LLMProvider"),
+    "create_provider": ("qsl.ai.llm_provider", "create_provider"),
+    "set_default_provider": ("qsl.ai.llm_provider", "set_default_provider"),
+    "get_default_provider": ("qsl.ai.llm_provider", "get_default_provider"),
+    "VerificationResult": ("qsl.ai.verifier", "VerificationResult"),
+    "verify": ("qsl.ai.verifier", "verify"),
+    "AgentReport": ("qsl.ai.report", "AgentReport"),
+    "run_demo": ("qsl.ai.demos", "run_demo"),
+    "list_demos": ("qsl.ai.demos", "list_demos"),
+    # 可视化 (需 matplotlib)
+    "draw_circuit_mpl": ("qsl.viz.circuit_drawer", "draw_circuit_mpl"),
+    "plot_bloch_sphere": ("qsl.viz.state_viz", "plot_bloch_sphere"),
+    "plot_state_city": ("qsl.viz.state_viz", "plot_state_city"),
+    "plot_amplitudes": ("qsl.viz.state_viz", "plot_amplitudes"),
+    "plot_qsphere": ("qsl.viz.state_viz", "plot_qsphere"),
+    "plot_histogram": ("qsl.viz.state_viz", "plot_histogram"),
     "DrugDiscoveryPipeline": ("qsl.pipelines.drug_discovery", "DrugDiscoveryPipeline"),
     "CryptoAnalysisPipeline": ("qsl.pipelines.crypto_analysis", "CryptoAnalysisPipeline"),
     "PortfolioOptimizer": ("qsl.pipelines.portfolio", "PortfolioOptimizer"),
@@ -148,13 +175,19 @@ __all__ = [
     # Core
     "QSLProgram", "QSLCompiler", "compile_and_run", "analyze",
     "parse_qsl", "parse_bool",
-    "QuantumState", "DensityMatrix", "GroverSearch", "GroverResult", "solve_sat",
+    "QuantumState", "DensityMatrix", "NoiseModel",
+    "GroverSearch", "GroverResult", "solve_sat",
     "SimulatorBackend", "list_backends", "get_backend", "AutoBackend",
     # Gates
     "I", "X", "Y", "Z", "H", "S", "T",
     "rx", "ry", "rz", "u3",
     "swap", "cswap", "mcx",
     "kronecker_prod", "kron", "controlled_gate",
+    # Circuit API
+    "QuantumCircuit", "Gate", "Instruction", "Parameter",
+    "ParameterExpression", "ExecutionResult", "library",
+    "dumps_qasm2", "loads_qasm2", "dumps_qasm3", "QASMParseError",
+    "to_qiskit", "from_qiskit", "to_cirq",
     # Algorithms
     "QuantumFourierTransform", "ShorSolver", "QAOA", "VQE",
     # Compiler
@@ -167,6 +200,11 @@ __all__ = [
     "IBMBackend", "AWSBraketBackend",
     "ProblemTranslator", "QuantumAgent", "HypothesisTester",
     "DiscoveryPipeline", "ResultExplainer",
+    "LLMProvider", "create_provider", "set_default_provider",
+    "get_default_provider", "VerificationResult", "verify",
+    "AgentReport", "run_demo", "list_demos",
+    "draw_circuit_mpl", "plot_bloch_sphere", "plot_state_city",
+    "plot_amplitudes", "plot_qsphere", "plot_histogram",
     "DrugDiscoveryPipeline", "CryptoAnalysisPipeline", "PortfolioOptimizer",
     "AlgorithmSearcher", "QuantumCompilerAI", "QuantumTheoremProver",
     "DistributedNode", "QuantumCluster", "QuantumBlockchain", "QuantumBlock",

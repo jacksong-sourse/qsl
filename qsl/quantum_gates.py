@@ -325,18 +325,193 @@ def controlled_gate(gate, n_controls):
 
 
 # ====================================================================
+# 衍生单比特门 (sqrt 系列 / 共轭转置 / 相位门)
+# ====================================================================
+
+Sdg = np.array([[1, 0], [0, -1j]], dtype=complex)          # S†
+Tdg = np.array([[1, 0], [0, np.exp(-1j * np.pi / 4)]], dtype=complex)  # T†
+SX = np.array([[1 + 1j, 1 - 1j], [1 - 1j, 1 + 1j]], dtype=complex) / 2  # sqrt(X)
+SXdg = SX.conj().T                                          # sqrt(X)†
+
+
+def p(lam):
+    """
+    相位门 P(λ) = diag(1, e^{iλ})。
+
+    与 Rz 的区别: P(λ) 不含全局相位, T = P(π/4), S = P(π/2), Z = P(π)。
+
+    参数:
+        lam: 相位角 (弧度)
+    返回:
+        numpy ndarray, shape (2, 2)
+    """
+    return np.array([[1, 0], [0, np.exp(1j * lam)]], dtype=complex)
+
+
+def u(theta, phi, lam):
+    """U 门 (u3 别名, 与 Qiskit UGate 一致)。"""
+    return u3(theta, phi, lam)
+
+
+# ====================================================================
+# 受控旋转门 / 受控通用门
+# ====================================================================
+
+def crx(theta):
+    """受控 RX 门 (控制位在高位)。"""
+    return controlled_gate(rx(theta), 1)
+
+
+def cry(theta):
+    """受控 RY 门 (控制位在高位)。"""
+    return controlled_gate(ry(theta), 1)
+
+
+def crz(theta):
+    """受控 RZ 门 (控制位在高位)。"""
+    return controlled_gate(rz(theta), 1)
+
+
+def cp(lam):
+    """受控相位门 CP(λ): 仅 |11> 获得相位 e^{iλ}。"""
+    gate = np.eye(4, dtype=complex)
+    gate[3, 3] = np.exp(1j * lam)
+    return gate
+
+
+def cu(theta, phi, lam, gamma=0.0):
+    """
+    受控 U 门 (控制位高位, 目标位低位), 带全局相位 gamma:
+        CU = |0><0|⊗I + |1><1|⊗e^{iγ}U(θ,φ,λ)
+    """
+    gate = np.eye(4, dtype=complex)
+    gate[2:, 2:] = np.exp(1j * gamma) * u3(theta, phi, lam)
+    return gate
+
+
+def ch():
+    """受控 Hadamard 门 (控制位高位)。"""
+    return controlled_gate(H, 1)
+
+
+def cs():
+    """受控 S 门 (控制位高位)。"""
+    return controlled_gate(S, 1)
+
+
+def csdg():
+    """受控 S† 门 (控制位高位)。"""
+    return controlled_gate(Sdg, 1)
+
+
+def ct():
+    """受控 T 门 (控制位高位)。"""
+    return controlled_gate(T, 1)
+
+
+def ctdg():
+    """受控 T† 门 (控制位高位)。"""
+    return controlled_gate(Tdg, 1)
+
+
+def dcx():
+    """双 CNOT 门 DCX = CNOT(q0,q1)·CNOT(q1,q0)。"""
+    gate = np.zeros((4, 4), dtype=complex)
+    gate[0, 0] = 1
+    gate[1, 3] = 1
+    gate[2, 1] = 1
+    gate[3, 2] = 1
+    return gate
+
+
+# ====================================================================
+# 两比特纠缠门
+# ====================================================================
+
+def iswap():
+    """
+    iSWAP 门: 交换两比特并附加相位 i。
+        |01> -> i|10>, |10> -> i|01>
+    """
+    gate = np.eye(4, dtype=complex)
+    gate[1, 1] = 0
+    gate[2, 2] = 0
+    gate[1, 2] = 1j
+    gate[2, 1] = 1j
+    return gate
+
+
+def rxx(theta):
+    """
+    RXX(θ) = exp(-i θ/2 X⊗X)。
+    矩阵基序 |q1 q0> (q1 高位)。
+    """
+    c = np.cos(theta / 2)
+    s = -1j * np.sin(theta / 2)
+    xx = np.kron(X, X)
+    return c * np.eye(4, dtype=complex) + s * xx
+
+
+def ryy(theta):
+    """RYY(θ) = exp(-i θ/2 Y⊗Y)。"""
+    c = np.cos(theta / 2)
+    s = -1j * np.sin(theta / 2)
+    yy = np.kron(Y, Y)
+    return c * np.eye(4, dtype=complex) + s * yy
+
+
+def rzz(theta):
+    """RZZ(θ) = exp(-i θ/2 Z⊗Z)。"""
+    return np.diag(np.exp(-1j * theta / 2 * np.array([1, -1, -1, 1])))
+
+
+def ecr():
+    """
+    ECR 门 (echoed cross-resonance), 与 Qiskit ECRGate 一致:
+        ECR = 1/√2 [[0,1,0,i],[1,0,-i,0],[0,i,0,1],[-i,0,1,0]]
+    """
+    inv = 1.0 / np.sqrt(2)
+    return inv * np.array(
+        [[0, 1, 0, 1j],
+         [1, 0, -1j, 0],
+         [0, 1j, 0, 1],
+         [-1j, 0, 1, 0]],
+        dtype=complex,
+    )
+
+
+def xx_plus_yy(theta, beta=0.0):
+    """XX+YY 门 (Qiskit XXPlusYYGate)。"""
+    c = np.cos(theta / 2)
+    s = np.sin(theta / 2)
+    gate = np.eye(4, dtype=complex)
+    gate[1, 1] = c
+    gate[2, 2] = c
+    gate[1, 2] = -1j * s * np.exp(-1j * beta)
+    gate[2, 1] = -1j * s * np.exp(1j * beta)
+    return gate
+
+
+# ====================================================================
 # 导出列表
 # ====================================================================
 
 __all__ = [
     # 基础矩阵
     "I", "X", "Y", "Z", "H", "S", "T",
+    # 衍生单比特门
+    "Sdg", "Tdg", "SX", "SXdg", "p",
     # 旋转门
     "rx", "ry", "rz",
     # 通用门
-    "u3",
+    "u3", "u",
     # 多量子比特门
     "swap", "cswap", "mcx",
+    # 受控门
+    "crx", "cry", "crz", "cp", "cu", "ch",
+    "cs", "csdg", "ct", "ctdg", "dcx",
+    # 两比特纠缠门
+    "iswap", "rxx", "ryy", "rzz", "ecr", "xx_plus_yy",
     # 工具函数
     "kronecker_prod", "kron", "controlled_gate",
 ]

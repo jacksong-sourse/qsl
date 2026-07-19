@@ -1,10 +1,14 @@
 """
 Autonomous Quantum Agent - Self-directed quantum problem solving.
 
-*** WARNING: DEMONSTRATION ONLY — requires langchain + OpenAI API key ***
+LLM access goes through the provider abstraction (qsl.ai.llm_provider).
+When no LLM is configured, the agent falls back to built-in bilingual
+(中文/English) rule routing and parameter extraction.
 """
 
+import re
 import time
+from types import SimpleNamespace
 from typing import Optional, Any
 from dataclasses import dataclass, field
 
@@ -27,6 +31,37 @@ class AgentResult:
     result_summary: str
     data: dict = field(default_factory=dict)
     error: Optional[str] = None
+    verification: Optional[Any] = None  # VerificationResult, None=未验证
+    decision_chain: list = field(default_factory=list)
+
+    @property
+    def verified(self) -> bool:
+        """结果是否通过自动验证 (未执行验证返回 False)。"""
+        return bool(self.verification is not None
+                    and getattr(self.verification, "passed", False))
+
+    def to_report(self, algorithm_reason: str = ""):
+        """生成结构化中文 Markdown 报告 (AgentReport)。"""
+        from .report import AgentReport
+        return AgentReport.from_agent_result(
+            self, verification=self.verification,
+            decision_chain=self.decision_chain,
+            algorithm_reason=algorithm_reason,
+        )
+
+
+class _ProviderLLMWrapper:
+    """Minimal langchain-compatible adapter for an LLMProvider.
+
+    Exposes .invoke(prompt) -> object with a .content attribute so that
+    existing code written against the langchain interface keeps working.
+    """
+
+    def __init__(self, provider):
+        self.provider = provider
+
+    def invoke(self, prompt: str):
+        return SimpleNamespace(content=self.provider.complete(prompt))
 
 
 class QuantumAgent:
@@ -57,10 +92,25 @@ class QuantumAgent:
         self._tools = []
 
     def _init_llm(self):
-        """Initialize LLM (OpenAI or DeepSeek)."""
+        """Initialize LLM via the provider abstraction.
+
+        Uses the global default provider (create_provider auto-detection)
+        wrapped in a langchain-compatible adapter; falls back to the legacy
+        langchain _create_llm path when no provider is available.
+        """
         if self._llm is not None:
             return self._llm
 
+        try:
+            from .llm_provider import get_default_provider
+            provider = get_default_provider()
+            if provider is not None and provider.available():
+                self._llm = _ProviderLLMWrapper(provider)
+                return self._llm
+        except Exception:
+            pass
+
+        # Legacy path: langchain ChatOpenAI (OpenAI / DeepSeek)
         try:
             from . import _create_llm
             self._llm = _create_llm()
@@ -73,40 +123,93 @@ class QuantumAgent:
         """
         Parse the task description for algorithm-specific parameters.
 
-        Extracts numbers, dimensions, and keywords from the task
-        description to parameterize the selected algorithm.
+        Bilingual (中文/English) extraction:
+          - shor: N from e.g. "分解 15" / "factor N=21" / "factor 15"
+          - qaoa/vqe/grover: n_qubits from e.g. "8 比特" / "n=6" /
+            "6 qubits" / "6量子比特", clamped to 2..12
         """
-        import re
-        task = self.task
         params = {}
 
-        # Extract numbers from the task description
-        numbers = re.findall(r'\b(\d+)\b', task)
-        nums = [int(n) for n in numbers]
-
         if algorithm == "shor":
-            # Look for numbers that could be the integer to factor
-            for n in nums:
-                if n > 2 and n < 1000000:
-                    params["N"] = n
-                    break
-            if "N" not in params:
-                params["N"] = 15
-
-        elif algorithm == "qaoa":
-            # Use the first number > 1 as n_qubits, capped at 8
-            n = next((x for x in nums if 2 <= x <= 20), 4)
-            params["n_qubits"] = min(n, 8)
-
-        elif algorithm == "vqe":
-            n = next((x for x in nums if 2 <= x <= 12), 4)
-            params["n_qubits"] = min(n, 6)
-
-        elif algorithm == "grover":
-            n = next((x for x in nums if 2 <= x <= 20), 4)
-            params["n_qubits"] = min(n, 6)
+            params["N"] = self._extract_shor_N() or 15
+        elif algorithm in ("qaoa", "vqe", "grover"):
+            n = self._extract_n_qubits()
+            params["n_qubits"] = n if n is not None else 4
 
         return params
+
+    def _extract_shor_N(self) -> Optional[int]:
+        """Extract the integer to factor from the task text.
+
+        Prefers numbers immediately following 分解/factor-like keywords,
+        skips years (>1900) and 1-digit numbers, and validates that N is
+        >= 3, odd and not a perfect power.
+        """
+        lower = self.task.lower()
+
+        def candidates():
+            # Numbers right after a factoring keyword come first
+            for m in re.finditer(
+                    r'(?:分解|因数|质因数|因子|factor(?:ize|ing)?|rsa|crack|解密|n\s*=)'
+                    r'\D{0,12}?(\d{2,})', lower):
+                yield int(m.group(1))
+            # Then any remaining numbers in the text
+            for m in re.finditer(r'\d+', self.task):
+                yield int(m.group())
+
+        seen = set()
+        for n in candidates():
+            if n in seen:
+                continue
+            seen.add(n)
+            if n < 10 or n > 1900:  # skip 1-digit numbers and years
+                continue
+            if self._is_valid_shor_N(n):
+                return n
+        return None
+
+    @staticmethod
+    def _is_valid_shor_N(n: int) -> bool:
+        """N must be >= 3, odd, and not a perfect power (e.g. 9, 27, 64)."""
+        if n < 3 or n % 2 == 0:
+            return False
+        for e in range(2, n.bit_length() + 1):
+            b = round(n ** (1.0 / e))
+            if b >= 2 and b ** e == n:
+                return False
+        return True
+
+    def _extract_n_qubits(self) -> Optional[int]:
+        """Extract qubit/problem size, clamped to 2..12.
+
+        Recognizes "8 比特" / "n=6" / "6 qubits" / "6量子比特" /
+        "6 节点" / "6 城市"; falls back to the first number in 2..12.
+        """
+        lower = self.task.lower()
+        for pat in (r'n\s*=\s*(\d+)',
+                    r'(\d+)\s*(?:个)?(?:量子比特|比特|qubits?)',
+                    r'(\d+)\s*(?:个)?(?:节点|城市)'):
+            m = re.search(pat, lower)
+            if m:
+                return max(2, min(12, int(m.group(1))))
+        for m in re.finditer(r'\d+', self.task):
+            n = int(m.group())
+            if 2 <= n <= 12:
+                return n
+        return None
+
+    def suggest_clarification(self) -> Optional[str]:
+        """Return a Chinese follow-up question when required params are missing."""
+        algorithm, _ = self._select_algorithm(None)
+        if algorithm == "shor" and self._extract_shor_N() is None:
+            return "请问要分解的整数是多少？（例如：分解 15）"
+        if algorithm == "qaoa" and self._extract_n_qubits() is None:
+            return "请问优化问题有多少个节点/变量？（例如：最大割 6 节点）"
+        if algorithm == "vqe" and self._extract_n_qubits() is None:
+            return "请问需要多少个量子比特？（例如：4 比特）"
+        if algorithm == "grover" and self._extract_n_qubits() is None:
+            return "请问搜索空间用多少比特表示？（例如：用 8 比特搜索）"
+        return None
 
     def run(self) -> AgentResult:
         """Execute the agent's decision loop."""
@@ -125,18 +228,54 @@ class QuantumAgent:
         parsed = self._parse_task_params(algorithm)
         task_params.update(parsed)
 
+        if self.verbose:
+            hint = self.suggest_clarification()
+            if hint:
+                print(f"  提示: {hint}")
+
         backend = self._select_backend(task_params)
         if self.verbose:
             print(f"  Selected backend: {backend}")
+
+        decision_chain = [{
+            "iteration": 0,
+            "action": "route",
+            "detail": f"算法={algorithm}, 参数={task_params}, 后端={backend}",
+        }]
 
         for iteration in range(1, self.max_iterations + 1):
             try:
                 result = self._execute_quantum_task(algorithm, task_params, backend)
 
                 if result.get("success", False):
-                    if self.verbose:
-                        print(f"  Iteration {iteration}: Success!")
+                    # 执行后自动验证: 经典可检验的独立交叉校验
+                    verification = self._verify_result(
+                        algorithm, result, task_params)
+                    if verification is not None and not verification.passed:
+                        if self.verbose:
+                            print(f"  Iteration {iteration}: 验证失败 - "
+                                  f"{verification.message}, 自动重规划...")
+                        decision_chain.append({
+                            "iteration": iteration,
+                            "action": "verify",
+                            "detail": f"FAIL: {verification.message}",
+                        })
+                        task_params = self._adjust_params(
+                            algorithm, task_params,
+                            {"error": verification.message})
+                        continue
 
+                    if self.verbose:
+                        vmsg = (f", 验证: {'PASS' if verification.passed else 'N/A'}"
+                                if verification is not None else "")
+                        print(f"  Iteration {iteration}: Success!{vmsg}")
+
+                    decision_chain.append({
+                        "iteration": iteration,
+                        "action": "execute+verify",
+                        "detail": (verification.message
+                                   if verification is not None else "执行成功"),
+                    })
                     explanation = self._explain_result(llm, result)
 
                     return AgentResult(
@@ -147,16 +286,28 @@ class QuantumAgent:
                         iterations=iteration,
                         result_summary=explanation or "Task completed",
                         data=result,
+                        verification=verification,
+                        decision_chain=decision_chain,
                     )
                 else:
                     if self.verbose:
                         print(f"  Iteration {iteration}: Failed, retrying...")
 
+                    decision_chain.append({
+                        "iteration": iteration,
+                        "action": "execute",
+                        "detail": f"执行失败: {result.get('error', '未知')}",
+                    })
                     task_params = self._adjust_params(algorithm, task_params, result)
 
             except Exception as e:
                 if self.verbose:
                     print(f"  Iteration {iteration}: Error - {e}")
+                decision_chain.append({
+                    "iteration": iteration,
+                    "action": "error",
+                    "detail": str(e),
+                })
                 if iteration >= self.max_iterations:
                     return AgentResult(
                         task=self.task,
@@ -166,6 +317,7 @@ class QuantumAgent:
                         iterations=iteration,
                         result_summary="Failed after max iterations",
                         error=str(e),
+                        decision_chain=decision_chain,
                     )
 
         return AgentResult(
@@ -175,44 +327,95 @@ class QuantumAgent:
             backend_used=backend,
             iterations=self.max_iterations,
             result_summary="Max iterations reached without success",
+            decision_chain=decision_chain,
         )
+
+    def _verify_result(self, algorithm: str, result: dict, params: dict):
+        """对执行结果做自动验证; 无法验证时返回 None (不阻塞流程)。"""
+        try:
+            from .verifier import (verify_shor, verify_sat, verify_qaoa,
+                                   verify_grover, verify_vqe)
+            if algorithm == "shor":
+                return verify_shor(params.get("N", 15),
+                                   result.get("factors", []))
+            if algorithm == "qaoa" and "cost_matrix" in result:
+                return verify_qaoa(result["cost_matrix"],
+                                   result.get("bitstring"),
+                                   encoding=result.get("encoding", "ising"))
+            if algorithm == "vqe" and "hamiltonian_terms" in result:
+                return verify_vqe(result.get("energy"),
+                                  result["hamiltonian_terms"])
+            if algorithm == "grover":
+                premises = params.get("premises")
+                solutions = result.get("solutions", [])
+                if premises and solutions:
+                    return verify_sat(premises, solutions[0])
+                marked = params.get("marked_states")
+                if marked and "measured" in result:
+                    return verify_grover(marked, result["measured"],
+                                         n_qubits=params.get("n_qubits"))
+        except Exception as e:
+            if self.verbose:
+                print(f"  (验证器异常, 跳过验证: {e})")
+        return None
+
+    # Bilingual (中文/English) rule routing table, top-down priority:
+    # 分解->shor, 优化->qaoa, 基态->vqe, 搜索->grover.
+    _ALGORITHM_RULES = (
+        ("shor", ("分解", "因数", "质因数", "因子", "解密",
+                  "factor", "factorize", "rsa", "crack", "shor")),
+        ("qaoa", ("优化", "最大割", "旅行商", "组合", "调度", "着色", "覆盖",
+                  "maxcut", "tsp", "portfolio", "optimize",
+                  "schedule", "coloring", "qaoa")),
+        ("vqe", ("基态", "能量", "分子", "化学", "哈密顿", "本征值",
+                 "ground state", "energy", "molecule", "chemistry",
+                 "hamiltonian", "vqe")),
+        ("grover", ("搜索", "查找", "数据库", "布尔", "数独", "可满足",
+                    "sudoku", "sat", "3-sat", "search", "find",
+                    "database", "grover")),
+    )
 
     def _select_algorithm(self, llm) -> tuple[str, dict]:
         """Determine which quantum algorithm to use.
-        
-        Primary logic: keyword matching for reliable algorithm selection.
-        Optional enhancement: LLM can refine selection when enabled and available.
+
+        Primary logic: bilingual keyword routing table (reliable).
+        LLM is only consulted when no rule matches; it is asked (in
+        Chinese) to reply with just the algorithm name.
         """
         task_lower = self.task.lower()
 
-        # Keyword matching as PRIMARY logic
-        if any(w in task_lower for w in ("factor", "rsa", "decrypt", "shor")):
-            return "shor", {"N": 15}
-        elif any(w in task_lower for w in ("optimize", "maxcut", "portfolio", "qaoa")):
-            return "qaoa", {"n_qubits": 4}
-        elif any(w in task_lower for w in ("energy", "ground", "chemistry", "vqe")):
-            return "vqe", {"n_qubits": 4}
-        elif any(w in task_lower for w in ("search", "grover", "find", "sat", "satisfy")):
-            return "grover", {"n_qubits": 4, "premises": ["x0 & x1"]}
+        # Rule routing table as PRIMARY logic
+        for algorithm, keywords in self._ALGORITHM_RULES:
+            if any(w in task_lower for w in keywords):
+                return algorithm, self._default_params(algorithm)
 
         # LLM as OPTIONAL enhancement only when keywords don't match
         if llm:
-            prompt = f"""Select the best quantum algorithm for this task.
-Options: grover, shor, qaoa, vqe
+            prompt = f"""请为以下任务选择最合适的量子算法。
+可选算法：shor（整数分解）、qaoa（组合优化）、vqe（分子基态能量）、grover（搜索）。
 
-Task: {self.task}
+任务：{self.task}
 
-Respond with just the algorithm name."""
+只回复算法名（shor/qaoa/vqe/grover 之一），不要输出其他任何内容。"""
             try:
                 response = llm.invoke(prompt)
-                alg = response.content.strip().lower()
+                alg = response.content.strip().strip(".,;:，。；：").lower()
                 if alg in ("grover", "shor", "qaoa", "vqe"):
-                    return alg, {}
+                    return alg, self._default_params(alg)
             except Exception:
                 pass
 
         # Default fallback
-        return "grover", {"n_qubits": 4, "premises": ["x0 & x1"]}
+        return "grover", self._default_params("grover")
+
+    @staticmethod
+    def _default_params(algorithm: str) -> dict:
+        """Default parameter dict for each algorithm."""
+        if algorithm == "shor":
+            return {"N": 15}
+        if algorithm in ("qaoa", "vqe"):
+            return {"n_qubits": 4}
+        return {"n_qubits": 4, "premises": ["x0 & x1"]}
 
     def _select_backend(self, params: dict) -> str:
         """Select optimal backend."""

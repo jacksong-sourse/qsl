@@ -278,26 +278,29 @@ class GroverSearch:
             (measurements, total_oracle_queries)
         """
         sqrt_N = math.sqrt(self.N)
-        m = 1.0
         total_queries = 0
+        # 外层重启: 单轮 BBHT 存在概率性漏检, 重启若干轮使失败概率指数衰减
+        max_restarts = 8
 
-        while m <= sqrt_N * lam:
-            t = random.randint(0, max(0, int(m)))
-            state = self._run_grover_iterations(t, circ)
-            total_queries += t
+        for _ in range(max_restarts):
+            m = 1.0
+            while m <= sqrt_N * lam:
+                t = random.randint(0, max(0, int(m)))
+                state = self._run_grover_iterations(t, circ)
+                total_queries += t
 
-            result_int, prob = state.measure()
-            result_int &= (self.N - 1)  # 屏蔽 ancilla 位 (ancilla 已逆计算为 |0>)
+                result_int, prob = state.measure()
+                result_int &= (self.N - 1)  # 屏蔽 ancilla 位 (ancilla 已逆计算为 |0>)
 
-            if is_solution(result_int):
-                # 找到解: 在同一放大后的态上完成剩余 shots
-                measurements = [(result_int, prob, True)]
-                if shots > 1:
-                    measurements.extend(
-                        self._measure_state(state, shots - 1, is_solution))
-                return measurements, total_queries
+                if is_solution(result_int):
+                    # 找到解: 在同一放大后的态上完成剩余 shots
+                    measurements = [(result_int, prob, True)]
+                    if shots > 1:
+                        measurements.extend(
+                            self._measure_state(state, shots - 1, is_solution))
+                    return measurements, total_queries
 
-            m = min(m * lam, sqrt_N * lam + 1.0)
+                m = min(m * lam, sqrt_N * lam + 1.0)
 
         raise NoSolutionError(
             premises=[e.to_string() for e in expressions],

@@ -27,9 +27,10 @@ class TestSimulatorBackend:
         assert backend.name == "simulator"
 
     def test_max_qubits(self):
-        """最大量子比特数。"""
+        """最大量子比特数 (与核心模拟器限制一致, 默认 26)。"""
+        from qsl.core.state import get_max_qubits
         backend = get_backend("simulator")
-        assert backend.max_qubits == 20
+        assert backend.max_qubits == get_max_qubits()
 
     def test_run_grover(self):
         """模拟器上运行 Grover 搜索。"""

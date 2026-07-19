@@ -20,7 +20,7 @@ import math
 import cmath
 import random
 import numpy as np
-from typing import List, Tuple, Set, Optional
+from typing import List, Tuple, Set, Optional, Dict
 
 from ..utils.validation import (
     validate_n_qubits,
@@ -33,8 +33,107 @@ from ..utils.exceptions import (
 )
 
 
-# 全局最大量子比特数限制
-MAX_QUBITS = 20
+# 全局最大量子比特数限制 (向量化内核后可支持 26~28, 内存允许时可用 set_max_qubits 调整)
+MAX_QUBITS = 26
+
+
+def set_max_qubits(n: int):
+    """调整模拟器允许的最大量子比特数 (需自行评估内存: 2^n × 16 字节)。"""
+    global MAX_QUBITS
+    MAX_QUBITS = int(n)
+
+
+def get_max_qubits() -> int:
+    return MAX_QUBITS
+
+
+# ----------------------------------------------------------------
+# 数组后端 (numpy / cupy GPU 加速开关)
+# ----------------------------------------------------------------
+
+_ARRAY_BACKEND = "numpy"
+_CUPY = None
+
+
+def set_array_backend(name: str = "numpy"):
+    """
+    切换模拟器数组后端。
+
+    参数:
+        name: "numpy" (默认) 或 "cupy" (GPU 加速, 需 pip install cupy-*)。
+    """
+    global _ARRAY_BACKEND, _CUPY
+    if name == "cupy":
+        try:
+            import cupy as cp  # type: ignore
+        except ImportError as e:
+            raise ImportError(
+                "未安装 cupy, GPU 后端不可用。请运行: pip install cupy-cuda12x "
+                "(按你的 CUDA 版本选择)。"
+            ) from e
+        _CUPY = cp
+        _ARRAY_BACKEND = "cupy"
+    elif name == "numpy":
+        _ARRAY_BACKEND = "numpy"
+    else:
+        raise ValueError(f"未知数组后端: {name!r} (可选 'numpy'/'cupy')")
+
+
+def get_array_backend() -> str:
+    return _ARRAY_BACKEND
+
+
+def _xp():
+    """当前数组模块 (numpy 或 cupy)。"""
+    return _CUPY if (_ARRAY_BACKEND == "cupy" and _CUPY is not None) else np
+
+
+def _to_host(arr) -> np.ndarray:
+    """把数组搬运回 CPU (cupy -> numpy)。"""
+    if _ARRAY_BACKEND == "cupy" and _CUPY is not None:
+        return _CUPY.asnumpy(arr)
+    return np.asarray(arr)
+
+
+def _reverse_bits_permutation(k: int) -> np.ndarray:
+    """k 比特索引的位反转置换 (用于与 little-endian 门矩阵约定互转)。"""
+    idx = np.arange(1 << k)
+    rev = np.zeros_like(idx)
+    for b in range(k):
+        rev |= ((idx >> b) & 1) << (k - 1 - b)
+    return rev
+
+
+def _embed_gate(matrix, targets, n_qubits: int):
+    """
+    把 k 比特门矩阵嵌入到 n 比特全空间, 返回 (2^n, 2^n) 矩阵。
+
+    约定: targets[0] 对应矩阵索引最高位 (big-endian 列出的比特)。
+    """
+    matrix = np.asarray(matrix, dtype=complex)
+    k = len(targets)
+    dim = 1 << n_qubits
+    out = np.zeros((dim, dim), dtype=complex)
+    targets = tuple(targets)
+    tset = set(targets)
+    rest = [q for q in range(n_qubits) if q not in tset]
+
+    # 枚举目标子空间与环境的组合
+    for env in range(1 << len(rest)):
+        base = 0
+        for i, q in enumerate(rest):
+            if (env >> i) & 1:
+                base |= (1 << q)
+        cols = []
+        for m in range(1 << k):
+            idx = base
+            for j, q in enumerate(targets):
+                if (m >> (k - 1 - j)) & 1:
+                    idx |= (1 << q)
+            cols.append(idx)
+        # cols 是全系统基态索引, 局部子矩阵就是门矩阵本身
+        out[np.ix_(cols, cols)] += matrix
+    return out
 
 
 class QuantumState:
@@ -64,7 +163,7 @@ class QuantumState:
         validate_n_qubits(n_qubits, MAX_QUBITS)
         self._n = n_qubits
         self._N = 1 << n_qubits
-        self.amplitudes = np.zeros(self._N, dtype=complex)
+        self.amplitudes = _xp().zeros(self._N, dtype=complex)
         self.amplitudes[0] = 1.0 + 0j
         self._gate_history: list = []
         self._readout_error: float = 0.0
@@ -109,7 +208,7 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_zero = (indices & mask) == 0
         target_bit_one = ~target_bit_zero
         
@@ -135,7 +234,7 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_zero = (indices & mask) == 0
         target_bit_one = ~target_bit_zero
         
@@ -160,7 +259,7 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_one = (indices & mask) != 0
         self.amplitudes[target_bit_one] *= -1
 
@@ -184,7 +283,7 @@ class QuantumState:
         validate_qubit_index(target, self._n)
         mask = 1 << target
         inv_sqrt2 = 1.0 / math.sqrt(2)
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_zero = (indices & mask) == 0
         target_bit_one = ~target_bit_zero
         
@@ -208,7 +307,7 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_one = (indices & mask) != 0
         self.amplitudes[target_bit_one] *= 1j
 
@@ -225,7 +324,7 @@ class QuantumState:
         validate_qubit_index(target, self._n)
         mask = 1 << target
         phase = cmath.exp(1j * math.pi / 4)
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_one = (indices & mask) != 0
         self.amplitudes[target_bit_one] *= phase
 
@@ -240,7 +339,7 @@ class QuantumState:
         c = math.cos(theta / 2)
         s = -1j * math.sin(theta / 2)
         mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_zero = (indices & mask) == 0
         target_bit_one = ~target_bit_zero
         
@@ -261,7 +360,7 @@ class QuantumState:
         c = math.cos(theta / 2)
         s = math.sin(theta / 2)
         mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_zero = (indices & mask) == 0
         target_bit_one = ~target_bit_zero
         
@@ -280,7 +379,7 @@ class QuantumState:
         """
         validate_qubit_index(target, self._n)
         mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         target_bit_zero = (indices & mask) == 0
         target_bit_one = ~target_bit_zero
         
@@ -316,7 +415,7 @@ class QuantumState:
             raise DuplicateQubitError([control, target])
         c_mask = 1 << control
         t_mask = 1 << target
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         c_one_t_zero = ((indices & c_mask) != 0) & ((indices & t_mask) == 0)
         c_one_t_one = ((indices & c_mask) != 0) & ((indices & t_mask) != 0)
         
@@ -346,7 +445,7 @@ class QuantumState:
         c_mask = 1 << control
         t_mask = 1 << target
         both_mask = c_mask | t_mask
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         both_one = (indices & both_mask) == both_mask
         self.amplitudes[both_one] *= -1
 
@@ -370,7 +469,7 @@ class QuantumState:
             return
         mask0 = 1 << q0
         mask1 = 1 << q1
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         b0 = (indices & mask0) != 0
         b1 = (indices & mask1) != 0
         
@@ -410,7 +509,7 @@ class QuantumState:
         c2_mask = 1 << c2
         t_mask = 1 << target
         both_mask = c1_mask | c2_mask
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         c_both_one = (indices & both_mask) == both_mask
         t_zero = (indices & t_mask) == 0
         t_one = ~t_zero
@@ -449,7 +548,7 @@ class QuantumState:
         mask = 0
         for q in qubits:
             mask |= (1 << q)
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         all_one = (indices & mask) == mask
         self.amplitudes[all_one] *= -1
 
@@ -605,6 +704,158 @@ class QuantumState:
             results.append((result, prob))
         return results
 
+    def sample_counts(self, shots: int = 1024,
+                      seed: Optional[int] = None) -> Dict[int, int]:
+        """
+        向量化采样, 返回 {基态索引: 次数}。
+
+        用 xp.random.choice 一次性抽取全部样本 + bincount 统计,
+        百万次采样秒级完成 (远快于逐次 measure)。
+
+        参数:
+            shots: 采样次数
+            seed: 随机种子 (结果可复现)
+        """
+        xp = _xp()
+        if shots <= 0:
+            return {}
+        if seed is not None:
+            xp.random.seed(seed)
+        probs = xp.abs(self.amplitudes) ** 2
+        total = xp.sum(probs)
+        probs = probs / total
+        samples = xp.random.choice(self._N, size=shots, p=probs)
+        counts = xp.bincount(samples, minlength=self._N)
+        counts = _to_host(counts)
+        return {i: int(counts[i]) for i in range(self._N) if counts[i] > 0}
+
+    def expectation(self, observable) -> float:
+        """
+        免采样直接计算解析期望值 <psi|O|psi>。
+
+        参数:
+            observable:
+                - Pauli 字符串, 如 "XXZ" (qubit 0 在最左, I 表示恒等)
+                - (coeff, pauli_str) 列表, 如 [(0.5, "ZZ"), (1.2, "XX")]
+                - (2^n, 2^n) 稠密矩阵
+        返回:
+            期望值 (float, 自动取实部)
+        """
+        if isinstance(observable, str):
+            return self._pauli_expectation([(1.0, observable)])
+        if isinstance(observable, (list, tuple)):
+            if observable and isinstance(observable[0], (list, tuple)):
+                return self._pauli_expectation(observable)
+            # 单个 (coeff, str) 元组
+            if len(observable) == 2 and isinstance(observable[1], str):
+                return self._pauli_expectation([tuple(observable)])
+        mat = np.asarray(observable, dtype=complex)
+        amps = _to_host(self.amplitudes)
+        return float(np.real(amps.conj() @ mat @ amps))
+
+    def _pauli_expectation(self, terms) -> float:
+        """Pauli 串求和期望值, 逐串用张量收缩计算 (O(2^n · n))。"""
+        total = 0.0
+        for coeff, pauli in terms:
+            total += float(np.real(coeff)) * self._single_pauli_expectation(pauli)
+        return total
+
+    def _single_pauli_expectation(self, pauli: str) -> float:
+        """
+        单个 Pauli 串的期望值。策略: 对含 Z 的串用对角求和,
+        对含 X/Y 的串通过对角化基变换 (H / Sdg·H) 后变为 Z 串。
+        """
+        pauli = pauli.upper()
+        if len(pauli) != self._n:
+            raise ValueError(
+                f"Pauli 串长度 {len(pauli)} 与量子比特数 {self._n} 不匹配"
+            )
+        xp = _xp()
+        amps = self.amplitudes.copy()
+        # 基变换: X -> H, Y -> Sdg·H 把对应比特转到 Z 基
+        for q, p in enumerate(pauli):
+            if p == "I":
+                continue
+            if p == "Z":
+                continue
+            mask = 1 << q
+            indices = xp.arange(self._N)
+            bit0 = (indices & mask) == 0
+            bit1 = ~bit0
+            a0 = amps[bit0].copy()
+            a1 = amps[bit1].copy()
+            inv = 1.0 / math.sqrt(2)
+            if p == "X":
+                amps[bit0] = (a0 + a1) * inv
+                amps[bit1] = (a0 - a1) * inv
+            elif p == "Y":
+                # Y = S X Sdg 的本征基: 先 Sdg 再 H
+                a0s = a0 * 1.0
+                a1s = a1 * (-1j)  # Sdg|1> = -i|1>
+                amps[bit0] = (a0s + a1s) * inv
+                amps[bit1] = (a0s - a1s) * inv
+            else:
+                raise ValueError(f"非法 Pauli 字符: {p!r} (仅 I/X/Y/Z)")
+        # 现在求 Z 串期望值: sum_i |amp_i|^2 · prod_q (-1)^{bit_q(i)}
+        probs = xp.abs(amps) ** 2
+        indices = xp.arange(self._N)
+        sign = xp.ones(self._N)
+        for q, p in enumerate(pauli):
+            if p in ("Z", "X", "Y"):
+                bit = (indices >> q) & 1
+                sign = sign * (1 - 2 * bit)
+        return float(_to_host(xp.sum(probs * sign)))
+
+    def bloch_vector(self, qubit: int = 0) -> Tuple[float, float, float]:
+        """
+        单比特约化态的 Bloch 向量 (x, y, z) = (<X>, <Y>, <Z>)。
+        其余比特被偏迹掉。
+        """
+        validate_qubit_index(qubit, self._n)
+        px = self._single_pauli_expectation_at(qubit, "X")
+        py = self._single_pauli_expectation_at(qubit, "Y")
+        pz = self._single_pauli_expectation_at(qubit, "Z")
+        return (px, py, pz)
+
+    def _single_pauli_expectation_at(self, qubit: int, p: str) -> float:
+        pauli = ["I"] * self._n
+        pauli[qubit] = p
+        return self._single_pauli_expectation("".join(pauli))
+
+    def fidelity(self, other: 'QuantumState') -> float:
+        """与另一纯态的保真度 |<psi|phi>|^2。"""
+        a = _to_host(self.amplitudes)
+        b = _to_host(other.amplitudes)
+        return float(abs(a.conj() @ b) ** 2)
+
+    def reduced_density_matrix(self, keep: List[int]) -> np.ndarray:
+        """
+        偏迹得到 keep 比特的约化密度矩阵 (numpy, 小端序: keep[0] 为最低位)。
+        """
+        keep = sorted(set(int(q) for q in keep))
+        for q in keep:
+            validate_qubit_index(q, self._n)
+        n_keep = len(keep)
+        rest = [q for q in range(self._n) if q not in keep]
+        amps = _to_host(self.amplitudes).reshape([2] * self._n)
+        # 把 keep 轴移到前面, rest 轴移到后面
+        perm = keep + rest
+        t = np.transpose(amps, perm).reshape(1 << n_keep, 1 << len(rest))
+        rho = t @ t.conj().T
+        return rho
+
+    def save(self, path: str):
+        """保存态向量到 .npz 文件。"""
+        np.savez(path, amplitudes=_to_host(self.amplitudes), n_qubits=self._n)
+
+    @staticmethod
+    def load(path: str) -> 'QuantumState':
+        """从 .npz 文件恢复量子态。"""
+        data = np.load(path)
+        st = QuantumState(int(data["n_qubits"]))
+        st.amplitudes = _xp().asarray(data["amplitudes"], dtype=complex)
+        return st
+
     # ----------------------------------------------------------------
     # 态信息与诊断
     # ----------------------------------------------------------------
@@ -690,6 +941,39 @@ class QuantumState:
         """打印量子态摘要到标准输出。"""
         print(self.summarize(top_n))
 
+    def dirac(self, decimals: int = 4, threshold: float = 1e-6) -> str:
+        """
+        返回 Dirac 记号字符串, 例如 ``(0.7071+0j)|00⟩ + (0.7071+0j)|11⟩``。
+
+        参数:
+            decimals: 振幅保留小数位
+            threshold: 振幅模长小于该阈值的项被省略
+        """
+        terms = []
+        n = self._n
+        amps = self.amplitudes
+        for i in range(self._N):
+            a = amps[i]
+            if abs(a) < threshold:
+                continue
+            bitstr = format(i, f"0{n}b") if n <= 16 else f"{i}"
+            # 格式化复数, 去除多余的零
+            re = round(a.real, decimals)
+            im = round(a.imag, decimals)
+            if im == 0:
+                coeff = f"{re:g}"
+            elif re == 0:
+                coeff = f"{im:g}j"
+            else:
+                sign = "+" if im >= 0 else "-"
+                coeff = f"({re:g}{sign}{abs(im):g}j)"
+            terms.append(f"{coeff}|{bitstr}⟩")
+        return " + ".join(terms) if terms else "0"
+
+    def pretty_print(self, decimals: int = 4, threshold: float = 1e-6):
+        """美观打印 Dirac 记号量子态到标准输出。"""
+        print(self.dirac(decimals=decimals, threshold=threshold))
+
     # ----------------------------------------------------------------
     # 魔法方法
     # ----------------------------------------------------------------
@@ -709,20 +993,23 @@ class QuantumState:
 
     def apply_gate(self, matrix, *targets: int):
         """
-        Apply an arbitrary gate matrix to the specified qubits.
+        把任意 k 比特门矩阵作用到指定量子比特上 (向量化实现)。
 
-        Uses the matrix representation to transform the state vector.
-        The gate matrix should be 2^k x 2^k for k = len(targets).
+        约定:
+            矩阵行/列索引 m 的第 (k-1-j) 位 = targets[j] 的比特值,
+            即 targets[0] 是矩阵索引的最高位 (与 qsl 全系及
+            quantum_gates.mcx/controlled_gate 的约定一致)。
 
-        Args:
-            matrix: numpy ndarray of shape (2^k, 2^k) representing the gate
-            *targets: qubit indices the gate acts on, from LSB to MSB
+        实现: reshape 为 [2]*n 张量 -> 目标轴移到最前 -> 矩阵乘 ->
+        逆置换还原。复杂度 O(2^n · 2^k), 全程 BLAS, 无 Python 循环,
+        且行列索引使用同一约定 (修复旧版 row/col 比特序不一致的缺陷)。
 
-        Raises:
-            QubitIndexError: if any target is out of bounds
-            ValueError: if matrix shape doesn't match number of targets
+        参数:
+            matrix: (2^k, 2^k) 复数酉矩阵
+            *targets: 作用的量子比特索引 (k 个, 互不相同)
         """
-        matrix = np.asarray(matrix, dtype=complex)
+        xp = _xp()
+        matrix = xp.asarray(matrix, dtype=complex)
         k = len(targets)
         expected_dim = 1 << k
 
@@ -732,45 +1019,28 @@ class QuantumState:
                 f"{k} qubit targets (expected {expected_dim}x{expected_dim})"
             )
 
-        for t in targets:
-            validate_qubit_index(t, self._n)
-
         if k == 0:
             return
 
-        new_amps = np.zeros(self._N, dtype=complex)
+        for t in targets:
+            validate_qubit_index(t, self._n)
+        if len(set(targets)) != k:
+            raise DuplicateQubitError(list(targets))
 
-        # Create masks and bit ordering
-        target_masks = [1 << t for t in targets]
-
-        max_amp = np.max(np.abs(self.amplitudes))
-        threshold = max_amp * 1e-15 if max_amp > 0 else 1e-40
-        
-        for i in range(self._N):
-            if abs(self[i]) < threshold:
-                continue
-
-            row_idx = 0
-            for bit_pos, mask in enumerate(reversed(target_masks)):
-                if i & mask:
-                    row_idx |= (1 << bit_pos)
-
-            # Apply all columns of the matrix
-            for col_idx in range(expected_dim):
-                if abs(matrix[row_idx, col_idx]) < 1e-30:
-                    continue
-
-                # Build the output basis state index
-                j = i
-                for bit_pos, mask in enumerate(target_masks):
-                    if col_idx & (1 << bit_pos):
-                        j |= mask
-                    else:
-                        j &= ~mask
-
-                new_amps[j] += matrix[row_idx, col_idx] * self[i]
-
-        self.amplitudes = new_amps
+        n = self._n
+        # psi 轴 (n-1-q) 对应量子比特 q
+        psi = self.amplitudes.reshape([2] * n)
+        target_axes = [n - 1 - q for q in targets]
+        rest_axes = [a for a in range(n) if a not in target_axes]
+        perm = target_axes + rest_axes
+        # 前 k 轴 = targets (列出的顺序, targets[0] 为矩阵最高位)
+        psi_t = xp.transpose(psi, perm).reshape(expected_dim, -1)
+        out = matrix @ psi_t
+        out_full = out.reshape([2] * n)
+        inv_perm = [0] * n
+        for pos, ax in enumerate(perm):
+            inv_perm[ax] = pos
+        self.amplitudes = xp.transpose(out_full, inv_perm).reshape(self._N).copy()
 
     def apply_gate_dict(self, gate: dict):
         """
@@ -1124,7 +1394,7 @@ class DensityMatrix:
             return
 
         sqrt_1mg = math.sqrt(1.0 - gamma)
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
 
         for q in range(self._n):
             mask = 1 << q
@@ -1159,7 +1429,7 @@ class DensityMatrix:
         if gamma < 0 or gamma > 1:
             raise ValueError(f"gamma must be in [0, 1], got {gamma}")
 
-        indices = np.arange(self._N)
+        indices = _xp().arange(self._N)
         xor = np.bitwise_xor.outer(indices, indices)
         dist = np.zeros((self._N, self._N))
         for b in range(self._n):
@@ -1213,3 +1483,49 @@ class DensityMatrix:
         purity_val = self.purity()
         return (f"DensityMatrix(n_qubits={self._n}, dim={self._N}, "
                 f"purity={purity_val:.4f})")
+
+
+class NoiseModel:
+    """
+    噪声模型 — 密度矩阵模拟路径的信道参数集合。
+
+    参数:
+        depolarizing: 每个门作用后应用的退极化概率 [0, 1]
+        amplitude_damping: 每个门作用后应用的振幅阻尼 (T1) 概率 [0, 1]
+        phase_damping: 每个门作用后应用的相位阻尼 (T2) 概率 [0, 1]
+        readout_error: 测量时每个比特的翻转概率 [0, 1]
+
+    示例:
+        >>> noise = NoiseModel(depolarizing=0.01, readout_error=0.02)
+        >>> result = circuit.execute_density(shots=1000, noise=noise)
+    """
+
+    __slots__ = ("depolarizing", "amplitude_damping",
+                 "phase_damping", "readout_error")
+
+    def __init__(self, depolarizing: float = 0.0,
+                 amplitude_damping: float = 0.0,
+                 phase_damping: float = 0.0,
+                 readout_error: float = 0.0):
+        for name, v in (("depolarizing", depolarizing),
+                        ("amplitude_damping", amplitude_damping),
+                        ("phase_damping", phase_damping),
+                        ("readout_error", readout_error)):
+            if not (0.0 <= v <= 1.0):
+                raise ValueError(f"{name} 必须在 [0, 1] 内, 得到 {v}")
+        self.depolarizing = float(depolarizing)
+        self.amplitude_damping = float(amplitude_damping)
+        self.phase_damping = float(phase_damping)
+        self.readout_error = float(readout_error)
+
+    @property
+    def is_ideal(self) -> bool:
+        """是否无噪声 (等价于纯态模拟)。"""
+        return (self.depolarizing == 0.0 and self.amplitude_damping == 0.0
+                and self.phase_damping == 0.0 and self.readout_error == 0.0)
+
+    def __repr__(self) -> str:
+        return (f"NoiseModel(depolarizing={self.depolarizing}, "
+                f"amplitude_damping={self.amplitude_damping}, "
+                f"phase_damping={self.phase_damping}, "
+                f"readout_error={self.readout_error})")
