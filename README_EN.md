@@ -2,14 +2,15 @@
 
 # QSL — Quantum Search Language
 
-**A Qiskit-competitive full-stack quantum computing framework · Chinese & English · AI-powered**
+**Lightweight full-stack quantum computing framework · Chinese-friendly · AI-powered**
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyPI](https://img.shields.io/pypi/v/qsl-quantum?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/qsl-quantum/)
 [![License](https://img.shields.io/badge/License-MIT-4CC61E)](./LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-731%2B-00C851)](https://github.com/jacksong-sourse/qsl/actions)
+[![Tests](https://img.shields.io/badge/Tests-731%2B-00C851)](https://github.com/qsl-quantum/qsl/actions)
 [![Minimal Deps](https://img.shields.io/badge/min%20deps-numpy%20only-important)](#-installation)
 
+[Why QSL?](#-why-qsl) ·
 [Features](#-features) ·
 [Installation](#-installation) ·
 [Quick Start](#-quick-start) ·
@@ -20,9 +21,46 @@
 [CLI](#-command-line) ·
 [Qiskit Interop](#-qiskit-interoperability)
 
+![QSL Architecture](./assets/architecture_en.svg)
+
+**🚀 Quick Start Demo**
+
+![QSL Demo](./assets/demo.gif)
+
 </div>
 
 [中文 README](./README.md)
+
+---
+
+## ❓ Why QSL?
+
+QSL is **not a Qiskit replacement** — it's a complementary lightweight alternative that interoperates seamlessly.
+
+| Dimension | QSL | Qiskit |
+|-----------|-----|--------|
+| **Install size** | NumPy only, ready in 5 seconds | Full install: hundreds of MB, complex deps |
+| **Chinese support** | 🇨🇳 Native Chinese docs, AI scientist, error messages | Primarily English |
+| **Learning curve** | Zero-config simulation & AI demos out of the box | Requires environment setup, backend understanding |
+| **AI integration** | 🤖 Built-in Chinese AI scientist for natural-language quantum computing | Third-party tools needed |
+| **Education** | 📚 Clean code, Chinese comments, great for teaching | Feature-rich but steeper learning curve |
+| **Research** | ⚡ Rapid prototyping, readable/modifiable source | Industrial-grade ecosystem, excellent hardware support |
+| **Interoperability** | 🔁 `to_qiskit()`/`from_qiskit()` two-way conversion — mix freely | — |
+
+**Choose QSL when:**
+- ✅ Learning quantum computing, teaching courses
+- ✅ Need Chinese documentation and AI assistance
+- ✅ Fast prototyping without dependency headaches
+- ✅ Quick CI/CD installation and testing
+- ✅ Natural-language-driven quantum computing
+
+**Choose Qiskit when:**
+- ✅ Running on IBM Quantum hardware
+- ✅ Need mature QML/chemistry ecosystem
+- ✅ Industrial production deployment
+- ✅ Need most complete gate set & backend support
+
+> 💡 **Best practice:** Prototype and teach with QSL, then seamlessly convert to Qiskit for hardware experiments.
 
 ---
 

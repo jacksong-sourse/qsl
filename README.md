@@ -2,7 +2,7 @@
 
 # QSL — Quantum Search Language
 
-**对标 Qiskit 的全栈量子计算框架 · 中文友好 · AI 驱动**
+**轻量全栈量子计算框架 · 中文友好 · AI 驱动**
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyPI](https://img.shields.io/pypi/v/qsl-quantum?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/qsl-quantum/)
@@ -10,6 +10,7 @@
 [![Tests](https://img.shields.io/badge/Tests-731%2B-00C851)](https://github.com/qsl-quantum/qsl/actions)
 [![Minimal Deps](https://img.shields.io/badge/min%20deps-numpy%20only-important)](#-安装)
 
+[Why QSL?](#-why-qsl) ·
 [特性](#-特性) ·
 [安装](#-安装) ·
 [快速开始](#-快速开始) ·
@@ -20,13 +21,50 @@
 [CLI](#-命令行) ·
 [Qiskit 互通](#-qiskit-互通)
 
+![QSL 架构图](./assets/architecture_zh.svg)
+
+**🚀 快速上手演示**
+
+![QSL 演示](./assets/demo.gif)
+
 </div>
+
+---
+
+## ❓ Why QSL?
+
+QSL 不是 Qiskit 的替代品，而是**互补的轻量级选择**。两者可以无缝互操作。
+
+| 维度 | QSL | Qiskit |
+|------|-----|--------|
+| **安装体积** | 核心仅 numpy，5 秒可用 | 完整安装数百 MB，依赖复杂 |
+| **中文支持** | 🇨🇳 原生中文文档、中文 AI 科学家、中文错误提示 | 主要英文文档 |
+| **上手门槛** | 零配置即可运行模拟和 AI 演示 | 需要配置环境、理解复杂后端 |
+| **AI 集成** | 🤖 内置中文 AI 科学家，自然语言驱动量子计算 | 需额外集成第三方工具 |
+| **教学场景** | 📚 代码简洁，注释中文，适合入门教学 | 功能全面但学习曲线陡峭 |
+| **研究场景** | ⚡ 快速原型验证，源码可读易修改 | 工业级生态，真机支持完善 |
+| **互操作性** | 🔁 `to_qiskit()`/`from_qiskit()` 双向转换，可混用 | — |
+
+**什么时候选 QSL？**
+- ✅ 量子计算入门学习、课程教学
+- ✅ 需要中文文档和中文 AI 辅助
+- ✅ 快速原型验证，不想被依赖困扰
+- ✅ CI/CD 环境需要快速安装测试
+- ✅ 需要自然语言驱动量子计算
+
+**什么时候选 Qiskit？**
+- ✅ 需要 IBM Quantum 真机运行
+- ✅ 依赖成熟的量子机器学习/化学生态
+- ✅ 工业级生产环境部署
+- ✅ 需要最完整的门集和后端支持
+
+> 💡 **最佳实践**：用 QSL 快速验证想法和教学演示，通过转换器无缝接入 Qiskit 生态运行真机实验。
 
 ---
 
 ## ✨ 特性
 
-QSL (Quantum Search Language) 是一个面向研究与教学的全栈量子计算框架。核心依赖 **仅 numpy**，装完即可用,**门槛极低**。
+QSL (Quantum Search Language) 是一个面向研究与教学的全栈量子计算框架。核心依赖 **仅 numpy**，装完即可用。
 
 - **🔧 电路层（对标 Qiskit）**
   - `QuantumCircuit` 类：门追加/插入/删除、`inverse()` 逆置、`compose()` 拼接、`decompose()` 分解、`transpile()` 优化
