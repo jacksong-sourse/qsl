@@ -26,7 +26,7 @@
 
 ## ✨ 特性
 
-QSL (Quantum Search Language) 是一个面向研究与教学的全栈量子计算框架。核心依赖 **仅 numpy**，装完即可用。
+QSL (Quantum Search Language) 是一个面向研究与教学的全栈量子计算框架。核心依赖 **仅 numpy**，装完即可用,**门槛极低**。
 
 - **🔧 电路层（对标 Qiskit）**
   - `QuantumCircuit` 类：门追加/插入/删除、`inverse()` 逆置、`compose()` 拼接、`decompose()` 分解、`transpile()` 优化
