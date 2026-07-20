@@ -885,6 +885,10 @@ class ExecutionResult:
         return {format(k, f"0{width}b"): v / self.shots
                 for k, v in self.counts.items()}
 
+    def probabilities_dict(self) -> Dict[str, float]:
+        """经验概率分布 {比特串: 频率} (Qiskit 兼容别名)。"""
+        return self.probabilities()
+
     def statevector(self) -> np.ndarray:
         return self.state.amplitudes.copy()
 

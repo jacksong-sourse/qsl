@@ -75,7 +75,7 @@ pip install "qsl-quantum[dev]"          # 开发测试工具
 
 ```bash
 python -c "import qsl; print(qsl.__version__)"
-# 0.6.1
+# 0.6.3
 python -m qsl --version
 ```
 
@@ -197,11 +197,13 @@ qc_dec  = qc.decompose()         # 分解到基础门集
 qc_t    = qc.transpile(optimization_level=2)  # 编译优化
 qc_rev  = qc.reverse_bits()      # 比特序反转
 
-# 门级变换
-from qsl.quantum_gates import H
-cc_h = H.control(2)              # 2 个控制位的 H 门
-h2   = H.power(0.5)              # H 的 1/2 幂
-hdag = H.inverse()               # H†
+# 门级变换 (使用 Gate 对象)
+from qsl import Gate
+from qsl.quantum_gates import H as H_mat
+H_gate = Gate("h", H_mat, 1, label="H")
+cc_h = H_gate.control(2)       # 2 个控制位的 H 门 (CCH)
+h2   = H_gate.power(0.5)       # H 的 1/2 幂 (√H)
+hdag = H_gate.inverse()        # H† = H (自逆)
 ```
 
 ### 执行与测量
@@ -260,7 +262,7 @@ qc_ghz    = library.ghz_state(4)           # 4 比特 GHZ
 qc_w      = library.w_state(4)             # 4 比特 W 态
 qc_qft    = library.qft(4)                 # 4 比特 QFT
 qc_iqft   = library.qft(4, inverse=True)   # IQFT
-qc_qpe    = library.qpe(U_gate, n_counting=4)  # 量子相位估计（U_gate 为要估计本征相位的酉门）
+# qc_qpe  = library.qpe(U_gate, n_counting=4)  # 量子相位估计 (需传入自定义酉门 Gate 对象)
 qc_diff   = library.grover_diffusion(4)    # Grover 扩散算子
 qc_tp     = library.teleportation()        # 量子隐形传态
 qc_rand   = library.random_circuit(5, depth=10, seed=0)
@@ -474,6 +476,8 @@ ruff check qsl                        # 代码检查
 
 参见 [CHANGELOG.md](./CHANGELOG.md)，遵循 [Keep a Changelog](https://keepachangelog.com/)。
 
+- **v0.6.3**（2026-07-19）：修复 CLI --list-demos/--ai-demo 崩溃、draw(style='iqp') 崩溃、ExecutionResult.probabilities_dict()、QuantumAgent API 兼容性、README 示例代码可运行性
+- **v0.6.2**（2026-07-19）：文档与依赖修正
 - **v0.6.1**（2026-07-19）：修复参数门顺序、CLI 增强、Qiskit 兼容 API、Dirac 记号打印、BBHT 重启、移除过时 setup.py
 - **v0.6.0**（2026-07-19）：电路层、QASM、转换器、可视化、噪声模拟、LLMProvider、自动验证、中文演示
 

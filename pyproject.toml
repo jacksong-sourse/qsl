@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qsl-quantum"
-version = "0.6.2"
+version = "0.6.3"
 description = "QSL - Quantum Search Language: Full-stack quantum computing framework with simulator, algorithms (QFT/Shor/QAOA/VQE), QML, hardware backends (IBM/AWS), AI scientist, and self-evolving meta-system"
 authors = [
     {name = "Song Ziming", email = "15011462616@163.com"}

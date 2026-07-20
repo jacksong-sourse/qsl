@@ -49,6 +49,10 @@ class AgentResult:
             algorithm_reason=algorithm_reason,
         )
 
+    def to_markdown(self, algorithm_reason: str = "") -> str:
+        """直接返回 Markdown 格式报告。"""
+        return self.to_report(algorithm_reason=algorithm_reason).to_markdown()
+
 
 class _ProviderLLMWrapper:
     """Minimal langchain-compatible adapter for an LLMProvider.
@@ -76,16 +80,17 @@ class QuantumAgent:
     cost matrix size for QAOA, etc.) instead of using hardcoded defaults.
 
     Args:
-        task_description: Natural language task description
+        task_description: Natural language task description (optional;
+            can also be passed to run())
         max_iterations: Maximum decision rounds (default 3)
         verbose: Print progress messages
     """
 
     def __init__(self,
-                 task_description: str,
+                 task_description: Optional[str] = None,
                  max_iterations: int = 3,
                  verbose: bool = True):
-        self.task = task_description
+        self.task = task_description or ""
         self.max_iterations = max_iterations
         self.verbose = verbose
         self._llm = None
@@ -211,8 +216,19 @@ class QuantumAgent:
             return "请问搜索空间用多少比特表示？（例如：用 8 比特搜索）"
         return None
 
-    def run(self) -> AgentResult:
-        """Execute the agent's decision loop."""
+    def run(self, task: Optional[str] = None) -> AgentResult:
+        """Execute the agent's decision loop.
+
+        Args:
+            task: Optional task description; overrides the task provided
+                  in the constructor if given.
+        """
+        if task is not None:
+            self.task = task
+        if not self.task:
+            raise ValueError(
+                "No task provided. Pass a task to QuantumAgent() or to run().")
+
         if self.verbose:
             print(f"\n{'='*60}")
             print(f"  Quantum Agent: {self.task}")

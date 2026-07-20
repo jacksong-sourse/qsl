@@ -20,6 +20,43 @@ _DEFAULT_STYLE = {
     "fontsize": 11,
 }
 
+# 预设风格 (与 Qiskit 风格名称兼容)
+_PRESET_STYLES = {
+    "iqp": {
+        "line_color": "#000000",
+        "gate_facecolor": "#FAF8D3",
+        "gate_edgecolor": "#000000",
+        "text_color": "#000000",
+        "background": "#FFFFFF",
+        "fontsize": 11,
+    },
+    "default": dict(_DEFAULT_STYLE),
+    "bw": {
+        "line_color": "#000000",
+        "gate_facecolor": "#FFFFFF",
+        "gate_edgecolor": "#000000",
+        "text_color": "#000000",
+        "background": "#FFFFFF",
+        "fontsize": 11,
+    },
+    "clifford": {
+        "line_color": "#1A1A1A",
+        "gate_facecolor": "#D4FFD4",
+        "gate_edgecolor": "#2E872E",
+        "text_color": "#1A1A1A",
+        "background": "#FFFFFF",
+        "fontsize": 11,
+    },
+    "textbook": {
+        "line_color": "#000000",
+        "gate_facecolor": "#E6E6FA",
+        "gate_edgecolor": "#4B0082",
+        "text_color": "#000000",
+        "background": "#FFFFFF",
+        "fontsize": 11,
+    },
+}
+
 # 受控 + 方框目标的两比特门 (控制点 + 目标方框)
 _CONTROLLED_BOX = {"cy", "ch", "cs", "csdg", "ct", "ctdg", "crx", "cry", "cu"}
 # 受控相位门: 两个实心圆点连线
@@ -65,8 +102,9 @@ def draw_circuit_mpl(circuit: QuantumCircuit, ax=None,
     参数:
         circuit: QuantumCircuit
         ax: 可选的 matplotlib Axes; 不传则新建 figure
-        style: 可选 dict, 覆盖键 line_color / gate_facecolor /
-               gate_edgecolor / text_color / background / fontsize
+        style: 可选 dict 或字符串, 覆盖键 line_color / gate_facecolor /
+               gate_edgecolor / text_color / background / fontsize;
+               字符串可选 'iqp' / 'default' / 'bw' / 'clifford' / 'textbook'
         fold: >0 时每行最多 fold 列后换行; -1 不换行
 
     返回:
@@ -76,8 +114,18 @@ def draw_circuit_mpl(circuit: QuantumCircuit, ax=None,
     from matplotlib.patches import Circle, FancyBboxPatch
 
     st = dict(_DEFAULT_STYLE)
-    if style:
-        st.update(style)
+    if style is not None:
+        if isinstance(style, str):
+            preset = _PRESET_STYLES.get(style)
+            if preset is None:
+                raise ValueError(
+                    f"未知风格 {style!r}, 可选: {sorted(_PRESET_STYLES)}")
+            st.update(preset)
+        elif isinstance(style, dict):
+            st.update(style)
+        else:
+            raise TypeError(
+                f"style 必须是 dict 或字符串,  got {type(style).__name__}")
     fs = st["fontsize"]
 
     n = circuit.num_qubits

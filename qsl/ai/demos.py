@@ -30,6 +30,22 @@ from .verifier import (
 )
 
 
+class DemoResult(dict):
+    """演示结果对象: 既可当 dict 访问, 又有 .to_markdown() 方法。"""
+
+    def __init__(self, report: AgentReport, data: dict):
+        super().__init__(data)
+        self._report = report
+
+    def to_markdown(self) -> str:
+        return self._report.to_markdown()
+
+    def __getattr__(self, name):
+        if name in self:
+            return self[name]
+        raise AttributeError(f"DemoResult has no attribute '{name}'")
+
+
 def _finalize(task: str,
               algorithm: str,
               reason: str,
@@ -38,8 +54,8 @@ def _finalize(task: str,
               verification: VerificationResult,
               result_payload,
               decision_chain: List[dict],
-              verbose: bool) -> dict:
-    """汇总演示产物: 生成报告并返回统一字典。"""
+              verbose: bool) -> DemoResult:
+    """汇总演示产物: 生成报告并返回统一对象。"""
     report = AgentReport(
         task=task,
         algorithm=algorithm,
@@ -56,6 +72,7 @@ def _finalize(task: str,
         "algorithm": algorithm,
         "result": result_payload,
         "verified": bool(verification.passed),
+        "report": report,
         "report_markdown": report.to_markdown(),
     }
     if verbose:
@@ -63,7 +80,7 @@ def _finalize(task: str,
         print(f"[{algorithm}] {task}")
         print(f"  结果: {result_summary}")
         print(f"  验证: {icon} {verification.message}")
-    return out
+    return DemoResult(report, out)
 
 
 # ----------------------------------------------------------------
@@ -624,19 +641,66 @@ DEMOS: Dict[str, Callable[..., dict]] = {
     "bb84": demo_bb84,
 }
 
+# 固定顺序的演示列表 (用于数字索引)
+_DEMO_ORDER = [
+    "factor", "sat", "sudoku", "maxcut", "tsp",
+    "graph_coloring", "grover", "ghz", "qrng", "bb84",
+]
 
-def list_demos() -> List[Tuple[str, str]]:
-    """返回 [(演示名称, 中文一句话简介), ...]。"""
+# 中文演示名称映射
+_DEMO_NAMES = {
+    "factor": "整数分解",
+    "sat": "3-SAT 求解",
+    "sudoku": "迷你数独",
+    "maxcut": "最大割",
+    "tsp": "旅行商问题",
+    "graph_coloring": "图着色",
+    "grover": "数据库搜索",
+    "ghz": "GHZ 纠缠态",
+    "qrng": "量子随机数",
+    "bb84": "BB84 量子密钥分发",
+}
+
+
+def list_demos() -> List[dict]:
+    """返回 [{id, name, key, desc}, ...] 格式的演示列表 (id 从 1 开始)。"""
     out = []
-    for name, fn in DEMOS.items():
+    for idx, key in enumerate(_DEMO_ORDER, start=1):
+        fn = DEMOS[key]
         doc = (fn.__doc__ or "").strip().splitlines()
-        out.append((name, doc[0] if doc else ""))
+        desc = doc[0] if doc else ""
+        out.append({
+            "id": idx,
+            "key": key,
+            "name": _DEMO_NAMES.get(key, key),
+            "desc": desc,
+        })
     return out
 
 
-def run_demo(name: str, verbose: bool = False) -> dict:
-    """按名称运行演示, 返回统一字典。"""
-    if name not in DEMOS:
+def _resolve_demo_key(name) -> str:
+    """把数字索引 (1-based int/str) 或字符串 key 解析为内部 demo key。"""
+    if isinstance(name, int):
+        idx = name
+        if 1 <= idx <= len(_DEMO_ORDER):
+            return _DEMO_ORDER[idx - 1]
         raise KeyError(
-            f"未知演示 {name!r}, 可选: {sorted(DEMOS)}")
-    return DEMOS[name](verbose=verbose)
+            f"演示编号 {idx} 超出范围, 有效编号: 1-{len(_DEMO_ORDER)}")
+    if isinstance(name, str):
+        # 先尝试作为数字字符串
+        try:
+            idx = int(name)
+            return _resolve_demo_key(idx)
+        except ValueError:
+            pass
+        # 再尝试作为 key
+        if name in DEMOS:
+            return name
+    raise KeyError(
+        f"未知演示 {name!r}, 可选编号 1-{len(_DEMO_ORDER)} 或名称: {sorted(DEMOS)}")
+
+
+def run_demo(name, verbose: bool = False) -> DemoResult:
+    """按编号 (1-based int) 或名称运行演示, 返回 DemoResult (支持 .to_markdown())。"""
+    key = _resolve_demo_key(name)
+    return DEMOS[key](verbose=verbose)

@@ -23,14 +23,34 @@ class TestDemoRegistry:
     def test_list_demos_returns_chinese_descriptions(self):
         items = list_demos()
         assert len(items) == 10
-        names = {name for name, _ in items}
-        assert names == EXPECTED_DEMOS
-        for name, desc in items:
-            assert isinstance(desc, str) and desc.strip(), f"{name} 缺少简介"
+        # 检查返回格式 [{id, key, name, desc}, ...]
+        keys = {d["key"] for d in items}
+        assert keys == EXPECTED_DEMOS
+        ids = [d["id"] for d in items]
+        assert ids == list(range(1, 11)), "id 应从 1 到 10 连续"
+        for d in items:
+            assert isinstance(d["desc"], str) and d["desc"].strip(), \
+                f"{d['key']} 缺少简介"
+            assert isinstance(d["name"], str) and d["name"].strip(), \
+                f"{d['key']} 缺少中文名"
 
     def test_run_unknown_demo_raises(self):
         with pytest.raises(KeyError):
             run_demo("nonexistent")
+
+    def test_run_demo_by_numeric_index(self):
+        # 测试按数字索引运行 (1-based)
+        out = run_demo(1, verbose=False)
+        assert out["verified"] is True
+        assert hasattr(out, "to_markdown")
+        md = out.to_markdown()
+        assert "# 任务报告" in md
+
+    def test_run_demo_by_string_index(self):
+        # 测试按字符串数字运行
+        out = run_demo("8", verbose=False)
+        assert out["algorithm"] == "circuit"
+        assert hasattr(out, "to_markdown")
 
 
 @pytest.mark.parametrize(
