@@ -23,10 +23,6 @@
 
 ![QSL 架构图](./assets/architecture_zh.svg)
 
-**🚀 快速上手演示**
-
-![QSL 演示](./assets/demo.gif)
-
 </div>
 
 ---
