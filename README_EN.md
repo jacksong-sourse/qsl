@@ -23,10 +23,6 @@
 
 ![QSL Architecture](./assets/architecture_en.svg)
 
-**🚀 Quick Start Demo**
-
-![QSL Demo](./assets/demo.gif)
-
 </div>
 
 [中文 README](./README.md)
